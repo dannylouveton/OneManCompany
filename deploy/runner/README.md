@@ -5,6 +5,18 @@ Employees' Claude Code sessions run in this container instead of on the
 control plane's machine. The container only sees the company folder; API keys
 and connector tokens never enter it.
 
+## The work machine
+
+The image is a full workstation: Python 3.12 + uv, Node 22 (npm, pnpm, yarn),
+Bun, git + GitHub CLI, build tools, ripgrep/fd/jq/yq, ffmpeg, ImageMagick,
+Poppler, Ghostscript, qpdf, Pandoc, LibreOffice (headless), SQLite /
+PostgreSQL / MySQL / Redis clients, Playwright + Chromium. Agents can install
+more for themselves (npm -g, pip --user, uv tool); their home folder is a
+persistent volume.
+
+Not there by design: your personal files, browser sessions, Keychain, SSH
+keys and Mac apps.
+
 ## Set up (on the control plane machine)
 
 ```bash

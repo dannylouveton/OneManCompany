@@ -29,7 +29,8 @@ services:
       # The runner's own secret store replaces the company .env: it only
       # holds the runner token and the tool-call signing key.
       - ./secrets.env:${OMC_DATA_ROOT}/.env:ro
-      # Claude Code sessions (--resume) survive container restarts.
-      - claude-home:/home/omc/.claude
+      # The agents' home: Claude Code sessions (--resume), tools they
+      # install and caches survive restarts and rebuilds.
+      - omc-home:/home/omc
 volumes:
-  claude-home:
+  omc-home:
