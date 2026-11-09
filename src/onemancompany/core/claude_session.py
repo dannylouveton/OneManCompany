@@ -318,6 +318,16 @@ class ClaudeDaemon:
         # CEO's own Claude Code servers, which would otherwise be inherited
         # and usable without confirmation (--dangerously-skip-permissions).
         cmd += ["--strict-mcp-config"]
+        # Skip the CEO's user-level settings (personal skills, plugins, hooks).
+        # Talent plugins are installed at user scope, so employees that need
+        # them keep user settings.
+        if self.claude_plugins:
+            logger.info(
+                "[claude-daemon] {} uses plugins {} — keeping user-level Claude settings",
+                self.employee_id, self.claude_plugins,
+            )
+        else:
+            cmd += ["--setting-sources", "project,local"]
         if self.is_new:
             cmd += ["--session-id", self.session_id]
         else:

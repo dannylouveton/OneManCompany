@@ -110,4 +110,6 @@ def test_claude_session_uses_strict_mcp_config():
     import inspect
     from onemancompany.core import claude_session
 
-    assert '"--strict-mcp-config"' in inspect.getsource(claude_session)
+    source = inspect.getsource(claude_session)
+    assert '"--strict-mcp-config"' in source
+    assert '"--setting-sources", "project,local"' in source
