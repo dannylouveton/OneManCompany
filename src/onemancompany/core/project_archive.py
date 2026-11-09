@@ -777,7 +777,8 @@ def _list_files_ripgrep(project_dir: Path, limit: int) -> list[str] | None:
             logger.warning("[list_project_files] rg returned {} files, truncating to {}", len(lines), limit)  # pragma: no cover
             lines = lines[:limit]  # pragma: no cover
         return lines
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:  # pragma: no cover
+    except (OSError, subprocess.TimeoutExpired) as e:  # pragma: no cover
+        # OSError: rg missing, or a PATH folder we may not search (EACCES on macOS)
         logger.debug("[list_project_files] ripgrep unavailable or timed out: {}", e)  # pragma: no cover
         return None  # pragma: no cover
 

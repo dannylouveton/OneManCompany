@@ -138,3 +138,15 @@ def test_agent_sandbox_settings(tmp_path, monkeypatch):
 
     monkeypatch.setattr(config_mod, "load_app_config", lambda: {"agent_sandbox": {"enabled": False}})
     assert claude_session.agent_sandbox_settings() is None
+
+
+def test_list_files_falls_back_when_rg_is_not_executable(tmp_path, monkeypatch):
+    import subprocess
+
+    from onemancompany.core import project_archive
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Permission denied", "rg")
+
+    monkeypatch.setattr(subprocess, "run", denied)
+    assert project_archive._list_files_ripgrep(tmp_path, 10) is None
