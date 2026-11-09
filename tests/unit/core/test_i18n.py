@@ -134,9 +134,11 @@ class TestLanguageRoutes:
             "00001": {"nickname": "老板", "level": 5},
             "00002": {"nickname": "暖心侠", "level": 4},
             "00006": {"nickname": "Le Hibou", "level": 2},
+            "00007": {"nickname": "The Owl", "level": 2},
         })
         monkeypatch.setattr("onemancompany.agents.onboarding._get_existing_nicknames", lambda: {"Le Hibou"})
         monkeypatch.setattr("onemancompany.agents.onboarding._pick_nickname", lambda n, existing: "Le Renard")
+        monkeypatch.setattr("onemancompany.agents.onboarding._load_nickname_pool", lambda lang="zh": ["Le Hibou", "Le Renard"])
         save = AsyncMock()
         monkeypatch.setattr(routes._store, "save_employee", save)
 
@@ -144,5 +146,5 @@ class TestLanguageRoutes:
 
         assert result["language"] == "fr"
         assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["language"] == "fr"
-        assert result["renamed"] == {"00001": "Le Patron", "00002": "Le Renard"}
-        assert save.await_count == 2
+        assert result["renamed"] == {"00001": "Le Patron", "00002": "Le Renard", "00007": "Le Renard"}
+        assert save.await_count == 3

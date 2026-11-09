@@ -2131,10 +2131,13 @@ async def get_talent_pool() -> dict:
 _CEO_NICKNAMES = {"zh": "老板", "fr": "Le Patron", "en": "The Boss"}
 
 
-def _nickname_matches_language(nickname: str, lang: str) -> bool:
-    """True when *nickname* already looks like it belongs to *lang*'s pool."""
-    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in nickname)
-    return has_cjk if lang == "zh" else not has_cjk
+def _nickname_matches_language(nickname: str, lang: str, pool: set[str]) -> bool:
+    """True when *nickname* already belongs to *lang* (its pool or CEO nickname)."""
+    if nickname == _CEO_NICKNAMES.get(lang):
+        return True
+    if lang == "zh":
+        return any("\u4e00" <= ch <= "\u9fff" for ch in nickname)
+    return nickname in pool
 
 
 @router.get("/api/settings/language")
@@ -2169,10 +2172,13 @@ async def update_language_settings(body: dict) -> dict:
 
     renamed: dict[str, str] = {}
     if body.get("rename_nicknames"):
+        from onemancompany.agents.onboarding import _load_nickname_pool
+
         existing = _get_existing_nicknames()
+        pool = set(_load_nickname_pool(lang)) if lang != "zh" else set()
         for emp_id, emp in sorted(_load_all().items()):
             current = emp.get("nickname", "") or ""
-            if current and _nickname_matches_language(current, lang):
+            if current and _nickname_matches_language(current, lang, pool):
                 continue
             if emp_id == CEO_ID:
                 nickname = _CEO_NICKNAMES.get(lang, "")
