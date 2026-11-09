@@ -7074,3 +7074,20 @@ button:disabled, [aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* MCP connectors (Tools panel) */
+.mcp-add-btn { margin-bottom: 8px; }
+.mcp-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 8px; }
+.mcp-check { display: flex; align-items: baseline; gap: 6px; font-size: 7px; padding: 2px 0; cursor: pointer; }
+.mcp-check-disabled { opacity: 0.5; cursor: default; }
+.mcp-action-name { font-family: monospace; font-size: 9px; color: var(--pixel-cyan, #4ff); }
+.mcp-hint { font-size: 6px; color: #888; }
+.mcp-endpoint { font-family: monospace; font-size: 9px; color: #bbb; word-break: break-all; margin-bottom: 4px; }
+.mcp-warning { font-size: 7px; color: #ffb347; margin-bottom: 4px; }
+.mcp-test-result { font-size: 7px; margin: 4px 0; min-height: 8px; }
+.mcp-test-result.ok { color: #4caf50; }
+.mcp-test-result.ko { color: #f55; }
+.mcp-field { display: flex; flex-direction: column; gap: 2px; font-size: 7px; color: #aaa; margin: 4px 0; }
+.mcp-field input, .mcp-field textarea { font-family: monospace; font-size: 10px; background: #0d0d14; color: #eee; border: 1px solid #444; padding: 4px; }
+.mcp-link { display: inline-block; font-size: 7px; color: var(--pixel-cyan, #4ff); margin: 2px 8px 4px 0; }
+.mcp-footer { display: flex; gap: 6px; justify-content: space-between; margin-top: 6px; }

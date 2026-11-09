@@ -6803,6 +6803,54 @@ class AppController {
         </div>`;
     },
 
+    /** MCP connector: connection, access per employee, allowed actions */
+    mcp: (toolId, s, esc) => {
+      const missing = s.missing_secrets || [];
+      const status = missing.length
+        ? `<div class="mcp-warning">Missing key: ${missing.map(esc).join(', ')}</div>`
+        : '';
+      const employees = (s.employees || []).map(e => `
+        <label class="mcp-check${e.claude_code ? '' : ' mcp-check-disabled'}">
+          <input type="checkbox" class="mcp-employee" value="${esc(e.id)}" ${e.granted ? 'checked' : ''} ${e.claude_code ? '' : 'disabled'}>
+          <span>${esc(e.name)}${e.nickname ? ' (' + esc(e.nickname) + ')' : ''}</span>
+          ${e.claude_code ? '' : '<span class="mcp-hint">Claude Code mode only</span>'}
+        </label>`).join('') || '<span class="empty-hint">No employees</span>';
+      const actions = (s.actions || []).map(a => `
+        <label class="mcp-check" title="${esc(a.description || '')}">
+          <input type="checkbox" class="mcp-action" value="${esc(a.name)}" ${a.allowed ? 'checked' : ''}>
+          <span class="mcp-action-name">${esc(a.name)}</span>
+          <span class="mcp-hint">${esc(a.description || '')}</span>
+        </label>`).join('');
+      const actionsBody = s.tested
+        ? (actions || '<span class="empty-hint">No actions</span>')
+        : '<span class="empty-hint">Test the connection to list its actions</span>';
+      return `
+        <div class="tool-section" data-mcp-tool="${esc(toolId)}">
+          <div class="tool-section-title">Connection</div>
+          <div class="tool-section-body">
+            <div class="mcp-endpoint">${esc(s.endpoint || '')}</div>
+            ${status}
+            <div id="mcp-test-result-${esc(toolId)}" class="mcp-test-result"></div>
+            <button class="pixel-btn small" onclick="window.app._mcpTest('${esc(toolId)}')">Test connection</button>
+          </div>
+        </div>
+        <div class="tool-section">
+          <div class="tool-section-title">Who can use it</div>
+          <div class="tool-section-body">${employees}</div>
+        </div>
+        <div class="tool-section">
+          <div class="tool-section-title">Allowed actions</div>
+          <div class="tool-section-body">
+            <div class="mcp-hint" style="margin-bottom:4px;">Unchecked actions are blocked, even without confirmation prompts.</div>
+            ${actionsBody}
+          </div>
+        </div>
+        <div class="mcp-footer">
+          <button class="pixel-btn small" onclick="window.app._mcpSave('${esc(toolId)}')">Save Changes</button>
+          <button class="pixel-btn small danger" onclick="window.app._mcpDelete('${esc(toolId)}')">Remove connector</button>
+        </div>`;
+    },
+
     /** Allowed users / access control */
     access: (toolId, s, esc) => {
       const title = s.title || 'Access Control';
@@ -6879,6 +6927,137 @@ class AppController {
     },
   };
 
+  // ── MCP connectors: install & access ───────────────────────────────────
+
+  async openAddTool(tab = 'catalog') {
+    const body = document.getElementById('tool-list-body');
+    const esc = (t) => this._escapeHtml(t == null ? '' : String(t));
+    const tabs = [['catalog', 'Catalog'], ['claude_code', 'My Claude Code connectors'], ['custom', 'Other (URL or command)']];
+    const tabBar = tabs.map(([id, label]) =>
+      `<button class="pixel-btn small ${id === tab ? '' : 'secondary'}" onclick="window.app.openAddTool('${id}')">${label}</button>`).join(' ');
+    body.innerHTML = `
+      <button class="btn-back" onclick="window.app.openToolList()">&larr; Back</button>
+      <div class="tool-detail">
+        <div class="tool-detail-header"><div><h3>Add a tool</h3><p>Connect an MCP connector and choose which employees can use it.</p></div></div>
+        <div class="mcp-tabs">${tabBar}</div>
+        <div id="mcp-add-body"><span class="empty-hint">Loading...</span></div>
+      </div>`;
+    const target = document.getElementById('mcp-add-body');
+    try {
+      if (tab === 'catalog') {
+        const data = await fetch('/api/mcp/catalog').then(r => r.json());
+        target.innerHTML = (data.catalog || []).map(c => `
+          <div class="tool-section">
+            <div class="tool-section-title">${esc(c.name)} ${c.installed ? '<span class="perm-tag">Installed</span>' : ''}</div>
+            <div class="tool-section-body">
+              <div class="mcp-hint">${esc(c.description)}</div>
+              ${c.installed ? '' : (c.env_vars || []).map(v => `
+                <label class="mcp-field">${esc(v.label)}
+                  <input type="${v.secret ? 'password' : 'text'}" class="mcp-secret" data-catalog="${esc(c.id)}" data-name="${esc(v.name)}" placeholder="${esc(v.placeholder || '')}" autocomplete="off">
+                </label>`).join('')}
+              ${c.help_url && !c.installed ? `<a href="${esc(c.help_url)}" target="_blank" rel="noopener" class="mcp-link">Get credentials →</a>` : ''}
+              ${c.installed ? '' : `<button class="pixel-btn small" onclick="window.app._mcpInstallCatalog('${esc(c.id)}')">Install</button>`}
+            </div>
+          </div>`).join('');
+      } else if (tab === 'claude_code') {
+        const data = await fetch('/api/mcp/claude-code').then(r => r.json());
+        const servers = data.servers || [];
+        target.innerHTML = servers.length ? servers.map(srv => `
+          <div class="tool-section">
+            <div class="tool-section-title">${esc(srv.name)} ${srv.installed ? '<span class="perm-tag">Installed</span>' : ''}</div>
+            <div class="tool-section-body">
+              <div class="mcp-endpoint">${esc(srv.summary)}</div>
+              ${srv.installed ? '' : `<button class="pixel-btn small" onclick="window.app._mcpImportClaudeCode('${esc(srv.name)}')">Share with the team</button>`}
+            </div>
+          </div>`).join('')
+          : '<span class="empty-hint">No MCP connectors found in your Claude Code configuration</span>';
+      } else {
+        target.innerHTML = `
+          <div class="tool-section">
+            <div class="tool-section-body">
+              <label class="mcp-field">Name<input type="text" id="mcp-custom-name" placeholder="My connector" autocomplete="off"></label>
+              <label class="mcp-field">URL, command or JSON
+                <textarea id="mcp-custom-text" rows="4" placeholder="https://mcp.example.com/mcp"></textarea>
+              </label>
+              <div class="mcp-hint">Keys found in the command are stored in the company .env file, never in the tool definition.</div>
+              <button class="pixel-btn small" onclick="window.app._mcpInstallCustom()">Install</button>
+            </div>
+          </div>`;
+      }
+    } catch (e) {
+      target.innerHTML = '<span class="empty-hint">Failed to load</span>';
+    }
+  }
+
+  async _mcpCreate(payload) {
+    const res = await fetch('/api/mcp/connectors', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      this._showToast(window.I18N ? I18N.t('Error: ' + (data.detail || res.status)) : 'Error: ' + (data.detail || res.status), 'error');
+      return;
+    }
+    this._showToast(window.I18N ? I18N.t('Connector installed') : 'Connector installed', 'success');
+    await this.openToolDetail(data.tool_id);
+    if (data.probe) this._mcpShowProbe(data.tool_id, data.probe);
+  }
+
+  _mcpInstallCatalog(catalogId) {
+    const secrets = {};
+    document.querySelectorAll(`.mcp-secret[data-catalog="${catalogId}"]`).forEach(i => { if (i.value) secrets[i.dataset.name] = i.value; });
+    this._mcpCreate({ source: 'catalog', catalog_id: catalogId, secrets });
+  }
+
+  _mcpImportClaudeCode(name) {
+    this._mcpCreate({ source: 'claude_code', name });
+  }
+
+  _mcpInstallCustom() {
+    const name = document.getElementById('mcp-custom-name')?.value.trim();
+    const text = document.getElementById('mcp-custom-text')?.value.trim();
+    if (!name || !text) {
+      this._showToast(window.I18N ? I18N.t('Name and URL or command are required') : 'Name and URL or command are required', 'error');
+      return;
+    }
+    this._mcpCreate({ source: 'custom', name, text });
+  }
+
+  _mcpShowProbe(toolId, probe) {
+    const box = document.getElementById(`mcp-test-result-${toolId}`);
+    if (!box) return;
+    box.className = 'mcp-test-result ' + (probe.ok ? 'ok' : 'ko');
+    box.textContent = probe.ok
+      ? (window.I18N ? I18N.t(`Connected — ${probe.tools.length} actions available`) : `Connected — ${probe.tools.length} actions available`)
+      : (window.I18N ? I18N.t(`Connection failed: ${probe.error}`) : `Connection failed: ${probe.error}`);
+  }
+
+  async _mcpTest(toolId) {
+    const box = document.getElementById(`mcp-test-result-${toolId}`);
+    if (box) { box.className = 'mcp-test-result'; box.textContent = window.I18N ? I18N.t('Testing...') : 'Testing...'; }
+    const probe = await fetch(`/api/tools/${encodeURIComponent(toolId)}/mcp-test`, { method: 'POST' }).then(r => r.json());
+    if (probe.ok) await this.openToolDetail(toolId);
+    this._mcpShowProbe(toolId, probe);
+  }
+
+  async _mcpSave(toolId) {
+    const allowed_users = [...document.querySelectorAll('.mcp-employee:checked')].map(i => i.value);
+    const actionBoxes = [...document.querySelectorAll('.mcp-action')];
+    const payload = { allowed_users };
+    if (actionBoxes.length) payload.disallowed_tools = actionBoxes.filter(i => !i.checked).map(i => i.value);
+    const res = await fetch(`/api/tools/${encodeURIComponent(toolId)}/mcp-access`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    this._showToast(window.I18N ? I18N.t(res.ok ? 'Saved' : 'Save failed') : (res.ok ? 'Saved' : 'Save failed'), res.ok ? 'success' : 'error');
+    if (res.ok) this.openToolDetail(toolId);
+  }
+
+  async _mcpDelete(toolId) {
+    if (!confirm('Remove this connector? Employees will lose access to it.')) return;
+    const res = await fetch(`/api/mcp/connectors/${encodeURIComponent(toolId)}`, { method: 'DELETE' });
+    if (res.ok) this.openToolList();
+  }
+
   async openToolList() {
     const modal = document.getElementById('tool-list-modal');
     const body = document.getElementById('tool-list-body');
@@ -6887,10 +7066,11 @@ class AppController {
 
     try {
       const tools = await fetch('/api/tools').then(r => r.json());
+      const addBtn = '<button class="pixel-btn small mcp-add-btn" onclick="window.app.openAddTool()">+ Add a tool</button>';
       if (tools.length === 0) {
-        body.innerHTML = '<span class="empty-hint">No tools registered</span>';
+        body.innerHTML = addBtn + '<span class="empty-hint">No tools registered</span>';
       } else {
-        body.innerHTML = tools.map(t => `
+        body.innerHTML = addBtn + tools.map(t => `
           <div class="tool-list-item" onclick="window.app.openToolDetail('${this._escapeHtml(t.id)}')">
             ${t.has_icon ? `<img src="/api/tools/${encodeURIComponent(t.id)}/icon" class="tool-list-icon" />` : '<span class="tool-list-no-icon">&#128295;</span>'}
             <div class="tool-list-info">
