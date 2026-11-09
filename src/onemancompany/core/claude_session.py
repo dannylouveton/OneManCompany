@@ -251,6 +251,58 @@ async def _ensure_plugins(plugins: list[str]) -> None:
     logger.info("[claude-plugins] setup complete for: {}", needed)
 
 
+
+# Files an employee's shell commands and Read tool must never open: the
+# company secret store and the CEO's own credentials.
+_SANDBOX_DENY_READ_HOME = (
+    "~/.claude.json", "~/.claude/.credentials.json", "~/.ssh", "~/.aws", "~/.gnupg",
+    "~/.config/gh", "~/.config/gcloud", "~/.netrc", "~/.docker/config.json",
+    "~/.npmrc", "~/.pypirc", "~/.kube", "~/Library/Keychains",
+)
+
+
+def agent_sandbox_settings() -> dict | None:
+    """Claude Code ``--settings`` that sandbox an employee session, or None if disabled.
+
+    config.yaml::
+
+        agent_sandbox:
+          enabled: true          # default
+          allow_write: []        # extra writable folders for shell commands
+          deny_read: []          # extra secret files/folders
+
+    * Shell commands run in the OS sandbox (Seatbelt on macOS, bubblewrap on
+      Linux): they cannot read the secret files below and can only write in
+      the company folder and the temp dir. No unsandboxed fallback.
+    * The Read/Edit tools get matching deny rules (they are not sandboxed).
+    """
+    from onemancompany.core.config import DATA_ROOT, DOT_ENV_FILENAME, SOURCE_ROOT, load_app_config
+
+    cfg = load_app_config().get("agent_sandbox")
+    cfg = cfg if isinstance(cfg, dict) else {"enabled": cfg is not False}
+    if cfg.get("enabled", True) is False:
+        return None
+    home = Path.home()
+    secrets = [str(DATA_ROOT / DOT_ENV_FILENAME), str(SOURCE_ROOT / DOT_ENV_FILENAME)]
+    secrets += [str(home / p[2:]) for p in _SANDBOX_DENY_READ_HOME]
+    secrets += [str(Path(p).expanduser()) for p in (cfg.get("deny_read") or [])]
+    secrets = list(dict.fromkeys(secrets))
+    allow_write = [str(DATA_ROOT)] + [str(Path(p).expanduser()) for p in (cfg.get("allow_write") or [])]
+    deny = []
+    for path in secrets:
+        rule_path = "/" + path  # "//abs/path" = absolute path in permission rules
+        targets = [rule_path, rule_path + "/**"] if Path(path).is_dir() else [rule_path]
+        deny += [f"{tool}({t})" for t in targets for tool in ("Read", "Edit")]
+    return {
+        "sandbox": {
+            "enabled": True,
+            "allowUnsandboxedCommands": False,
+            "failIfUnavailable": True,
+            "filesystem": {"allowWrite": allow_write, "denyRead": secrets, "denyWrite": secrets},
+        },
+        "permissions": {"deny": deny},
+    }
+
 class ClaudeDaemon:
     """A persistent Claude CLI process that accepts prompts via stream-json stdin."""
 
@@ -337,6 +389,9 @@ class ClaudeDaemon:
             )
         else:
             cmd += ["--setting-sources", "project,local"]
+        sandbox = agent_sandbox_settings()
+        if sandbox:
+            cmd += ["--settings", json.dumps(sandbox)]
         if self.is_new:
             cmd += ["--session-id", self.session_id]
         else:

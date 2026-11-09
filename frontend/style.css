@@ -7096,3 +7096,9 @@ button:disabled, [aria-disabled="true"] {
 .mcp-emp-panel { margin: 2px 0 6px 16px; padding: 4px 6px; border-left: 2px solid var(--pixel-cyan, #4ff); }
 .mcp-emp-panel.hidden, .mcp-custom-badge.hidden { display: none; }
 .mcp-custom-badge { font-size: 6px; }
+
+.mcp-field select { font-family: monospace; font-size: 10px; background: #0d0d14; color: #eee; border: 1px solid #444; padding: 3px; }
+.api-rules { margin: 2px 0 4px; }
+.api-pending { border: 1px solid #ffb347; padding: 4px 6px; margin-bottom: 4px; font-size: 7px; }
+.api-body { font-size: 8px; max-height: 120px; overflow: auto; background: #0d0d14; padding: 4px; margin: 3px 0; white-space: pre-wrap; }
+.api-log-row { display: grid; grid-template-columns: 70px 40px 1fr auto; gap: 6px; font-size: 7px; padding: 2px 0; border-bottom: 1px solid #222; align-items: baseline; word-break: break-all; }

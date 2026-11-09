@@ -5479,6 +5479,116 @@ async def mcp_delete_connector(tool_id: str) -> dict:
     return result
 
 
+def _api_key_section(tool_id: str, tool_data: dict) -> dict:
+    """Key, rules, approvals and journal for an API key tool (the key itself is never returned)."""
+    from onemancompany.core import api_tools
+    from onemancompany.core.config import CEO_ID as _CEO
+    from onemancompany.core.secret_store import get_secret_store, masked
+
+    allowed = {str(u) for u in (tool_data.get("allowed_users") or [])}
+    personal = tool_data.get("employee_rules") or {}
+    employees = []
+    for emp_id, emp in sorted(_load_all().items()):
+        if emp_id == _CEO:
+            continue
+        employees.append({
+            "id": emp_id,
+            "name": emp.get("name", emp_id),
+            "nickname": emp.get("nickname", ""),
+            "granted": emp_id in allowed,
+            "custom_rules": emp_id in personal,
+            "rules": api_tools.effective_rules(tool_data, emp_id),
+        })
+    api = tool_data.get("api") or {}
+    auth = api.get("auth") or {}
+    return {
+        "type": "api_key",
+        "title": "API key",
+        "tool_id": tool_id,
+        "base_url": api.get("base_url", ""),
+        "docs_url": api.get("docs_url", ""),
+        "auth": {"in": auth.get("in", "header"), "name": auth.get("name", ""), "format": auth.get("format", "")},
+        "key": masked(get_secret_store().get(tool_data.get("secret", ""))),
+        "rules": api_tools.effective_rules({"rules": tool_data.get("rules")}, ""),
+        "employees": employees,
+        "pending": api_tools.list_pending(tool_id),
+        "log": api_tools.read_log(tool_id, 30),
+    }
+
+
+@router.post("/api/apikeys")
+async def api_key_create(body: dict) -> dict:
+    """Add an API key as a company tool. Body: {name, base_url, key, auth_in, auth_name, auth_format, docs_url, description}.
+
+    The key goes straight to the secret store; it is never written to tool.yaml nor returned.
+    """
+    from onemancompany.agents.coo_agent import _load_assets_from_disk
+    from onemancompany.core import api_tools
+
+    try:
+        tool_id = api_tools.create_api_tool(
+            str(body.get("name", "")).strip(), str(body.get("base_url", "")).strip(), str(body.get("key", "")).strip(),
+            auth_in=str(body.get("auth_in") or "header"), auth_name=str(body.get("auth_name") or "Authorization"),
+            auth_format=str(body.get("auth_format") or "Bearer {key}"), docs_url=str(body.get("docs_url") or ""),
+            description=str(body.get("description") or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _load_assets_from_disk()
+    return {"status": "ok", "tool_id": tool_id}
+
+
+@router.put("/api/tools/{tool_id}/api-key")
+async def api_key_replace(tool_id: str, body: dict) -> dict:
+    from onemancompany.core import api_tools
+
+    try:
+        api_tools.replace_key(tool_id, str(body.get("key", "")).strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok"}
+
+
+@router.put("/api/tools/{tool_id}/api-access")
+async def api_key_update_access(tool_id: str, body: dict) -> dict:
+    """Body (each key optional): {"allowed_users": [...], "rules": {...}, "employee_rules": {"00006": {...} | null}}."""
+    from onemancompany.core import api_tools
+
+    try:
+        data = api_tools.update_access(tool_id, body.get("allowed_users"), body.get("rules"), body.get("employee_rules"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    tool = company_state.tools.get(tool_id)
+    if tool is not None:
+        tool.allowed_users = list(data.get("allowed_users") or [])
+    return {"status": "ok", "allowed_users": data.get("allowed_users", [])}
+
+
+@router.post("/api/tools/{tool_id}/api-requests/{req_id}/{decision}")
+async def api_key_resolve(tool_id: str, req_id: str, decision: str) -> dict:
+    """CEO approves or rejects a write waiting for approval."""
+    from onemancompany.core import api_tools
+
+    if decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be approve or reject")
+    try:
+        item = await asyncio.to_thread(api_tools.resolve_request, tool_id, req_id, decision == "approve")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "ok", "request": item}
+
+
+@router.delete("/api/apikeys/{tool_id}")
+async def api_key_delete(tool_id: str) -> dict:
+    from onemancompany.agents.coo_agent import remove_tool
+    from onemancompany.core import api_tools
+
+    if not api_tools.load_tool(tool_id):
+        raise HTTPException(status_code=404, detail="Not an API key tool")
+    api_tools.delete_secret(tool_id)
+    return remove_tool(tool_id)
+
+
 @router.get("/api/tools/{tool_id}/definition")
 async def get_tool_definition(tool_id: str):
     """Return tool definition with dynamic sections for the tool detail view.
@@ -5599,6 +5709,8 @@ async def get_tool_definition(tool_id: str):
     allowed = tool_data.get("allowed_users")
     if tool_data.get("type") == "mcp":
         sections.append(_mcp_section(tool_id, tool_data))
+    elif tool_data.get("type") == "api_key":
+        sections.append(_api_key_section(tool_id, tool_data))
     elif allowed is not None:
         users_info = []
         for uid in (allowed or []):

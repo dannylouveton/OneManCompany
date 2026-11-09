@@ -6896,6 +6896,89 @@ class AppController {
         </div>`;
     },
 
+    /** API key tool: masked key, who can use it, write rules, approvals, call journal */
+    api_key: (toolId, s, esc) => {
+      const rulesEditor = (prefix, r, extra = '') => {
+        const mode = !r.read_only ? 'all' : ((r.allowed_writes || []).length ? 'listed' : 'none');
+        const opt = (v, label) => `<option value="${v}" ${mode === v ? 'selected' : ''}>${label}</option>`;
+        return `
+          <div class="api-rules" data-rules="${esc(prefix)}" ${extra}>
+            <label class="mcp-field">Writes (POST, PUT, PATCH, DELETE)
+              <select class="api-writes-mode">${opt('none', 'Read only')}${opt('listed', 'Only the writes listed below')}${opt('all', 'All writes')}</select>
+            </label>
+            <label class="mcp-field">Allowed writes (one per line, * = any segment)
+              <textarea class="api-writes" rows="2" placeholder="POST /conversations/*/reply">${esc((r.allowed_writes || []).join('\n'))}</textarea>
+            </label>
+            <label class="mcp-check"><input type="checkbox" class="api-approval" ${r.approval ? 'checked' : ''}><span>Ask me before each write</span></label>
+          </div>`;
+      };
+      const employees = (s.employees || []).map(e => `
+        <div class="mcp-emp-row">
+          <label class="mcp-check">
+            <input type="checkbox" class="api-employee" value="${esc(e.id)}" ${e.granted ? 'checked' : ''}>
+            <span>${esc(e.name)}${e.nickname ? ' (' + esc(e.nickname) + ')' : ''}</span>
+            <span class="perm-tag mcp-custom-badge${e.custom_rules ? '' : ' hidden'}" data-badge="api-${esc(e.id)}">Personalized</span>
+          </label>
+          <button class="pixel-btn small secondary mcp-emp-toggle" onclick="window.app._mcpTogglePersonal('api-${esc(e.id)}')">Rules</button>
+        </div>
+        <div class="mcp-emp-panel hidden" data-emp="api-${esc(e.id)}" data-api-emp="${esc(e.id)}" data-custom="${e.custom_rules ? '1' : '0'}"
+             onchange="window.app._apiMarkCustom('${esc(e.id)}')">
+          <div class="mcp-hint" style="margin-bottom:3px;">Rules for this employee only. Changing them makes them personal.</div>
+          ${rulesEditor('emp-' + e.id, e.rules || s.rules)}
+          <button class="pixel-btn small secondary" onclick="event.stopPropagation(); window.app._apiResetPersonal('${esc(e.id)}')">Use shared settings</button>
+        </div>`).join('') || '<span class="empty-hint">No employees</span>';
+      const pending = (s.pending || []).map(p => `
+        <div class="api-pending">
+          <div><b>${esc(p.method)} ${esc(p.path)}</b> <span class="mcp-hint">${esc(p.employee)} · ${esc((p.created_at || '').replace('T', ' ').slice(0, 16))}</span></div>
+          ${p.body != null ? `<pre class="api-body">${esc(typeof p.body === 'string' ? p.body : JSON.stringify(p.body, null, 2))}</pre>` : ''}
+          <button class="pixel-btn small" onclick="window.app._apiResolve('${esc(toolId)}','${esc(p.id)}','approve')">Send</button>
+          <button class="pixel-btn small danger" onclick="window.app._apiResolve('${esc(toolId)}','${esc(p.id)}','reject')">Reject</button>
+        </div>`).join('');
+      const log = (s.log || []).map(l => `
+        <div class="api-log-row">
+          <span class="mcp-hint">${esc((l.at || '').replace('T', ' ').slice(0, 16))}</span>
+          <span>${esc(l.employee || '')}</span>
+          <span><b>${esc(l.method || '')}</b> ${esc(l.path || '')}</span>
+          <span class="perm-tag">${esc(l.decision || '')}${l.http_status ? ' · ' + esc(l.http_status) : ''}</span>
+        </div>`).join('');
+      const auth = s.auth || {};
+      return `
+        <div class="tool-section" data-api-tool="${esc(toolId)}">
+          <div class="tool-section-title">Connection</div>
+          <div class="tool-section-body">
+            <div class="mcp-endpoint">${esc(s.base_url || '')}</div>
+            <div class="mcp-hint"><span>${auth.in === 'query' ? 'Key sent as query parameter' : 'Key sent in header'}</span> <code>${esc(auth.name || '')}</code></div>
+            <div class="mcp-hint"><span>Current key</span> <code>${esc(s.key || '—')}</code></div>
+            ${s.docs_url ? `<a href="${esc(s.docs_url)}" target="_blank" rel="noopener" class="mcp-link">API documentation →</a>` : ''}
+            <div class="mcp-hint" style="margin-top:4px;">Employees never see the key: the server adds it to each call it allows.</div>
+            <label class="mcp-field">Replace the key
+              <input type="password" id="api-new-key" placeholder="New API key" autocomplete="new-password">
+            </label>
+            <button class="pixel-btn small secondary" onclick="window.app._apiReplaceKey('${esc(toolId)}')">Replace key</button>
+          </div>
+        </div>
+        ${pending ? `<div class="tool-section"><div class="tool-section-title">Waiting for your approval</div><div class="tool-section-body">${pending}</div></div>` : ''}
+        <div class="tool-section">
+          <div class="tool-section-title">Who can use it</div>
+          <div class="tool-section-body">${employees}</div>
+        </div>
+        <div class="tool-section">
+          <div class="tool-section-title">What they can do</div>
+          <div class="tool-section-body">
+            <div class="mcp-hint" style="margin-bottom:4px;">Reads (GET) are always allowed. Shared settings for every employee without personal rules.</div>
+            ${rulesEditor('shared', s.rules || {})}
+          </div>
+        </div>
+        <div class="mcp-footer">
+          <button class="pixel-btn small" onclick="window.app._apiSave('${esc(toolId)}')">Save Changes</button>
+          <button class="pixel-btn small danger" onclick="window.app._apiDelete('${esc(toolId)}')">Remove API key</button>
+        </div>
+        <div class="tool-section">
+          <div class="tool-section-title">Recent calls</div>
+          <div class="tool-section-body">${log || '<span class="empty-hint">No calls yet</span>'}</div>
+        </div>`;
+    },
+
     /** Allowed users / access control */
     access: (toolId, s, esc) => {
       const title = s.title || 'Access Control';
@@ -6977,13 +7060,13 @@ class AppController {
   async openAddTool(tab = 'catalog') {
     const body = document.getElementById('tool-list-body');
     const esc = (t) => this._escapeHtml(t == null ? '' : String(t));
-    const tabs = [['catalog', 'Catalog'], ['claude_code', 'My Claude Code connectors'], ['custom', 'Other (URL or command)']];
+    const tabs = [['catalog', 'Catalog'], ['claude_code', 'My Claude Code connectors'], ['custom', 'Other (URL or command)'], ['api_key', 'API key']];
     const tabBar = tabs.map(([id, label]) =>
       `<button class="pixel-btn small ${id === tab ? '' : 'secondary'}" onclick="window.app.openAddTool('${id}')">${label}</button>`).join(' ');
     body.innerHTML = `
       <button class="btn-back" onclick="window.app.openToolList()">&larr; Back</button>
       <div class="tool-detail">
-        <div class="tool-detail-header"><div><h3>Add a tool</h3><p>Connect an MCP connector and choose which employees can use it.</p></div></div>
+        <div class="tool-detail-header"><div><h3>Add a tool</h3><p>Connect an MCP connector or an API key and choose which employees can use it.</p></div></div>
         <div class="mcp-tabs">${tabBar}</div>
         <div id="mcp-add-body"><span class="empty-hint">Loading...</span></div>
       </div>`;
@@ -7016,6 +7099,27 @@ class AppController {
             </div>
           </div>`).join('')
           : '<span class="empty-hint">No MCP connectors found in your Claude Code configuration</span>';
+      } else if (tab === 'api_key') {
+        target.innerHTML = `
+          <div class="tool-section">
+            <div class="tool-section-body">
+              <div class="mcp-hint" style="margin-bottom:4px;">Employees never receive the key. They ask the server to make the call; it checks your rules, adds the key and returns the answer. Writes can wait for your approval.</div>
+              <label class="mcp-field">Name<input type="text" id="api-name" placeholder="Intercom API" autocomplete="off"></label>
+              <label class="mcp-field">API address<input type="url" id="api-base-url" placeholder="https://api.intercom.io" autocomplete="off"></label>
+              <label class="mcp-field">API key<input type="password" id="api-key" placeholder="Paste the key here" autocomplete="new-password"></label>
+              <label class="mcp-field">Key sent as
+                <select id="api-auth-in" onchange="document.getElementById('api-auth-format-row').classList.toggle('hidden', this.value === 'query')">
+                  <option value="header">Header</option><option value="query">Query parameter</option>
+                </select>
+              </label>
+              <label class="mcp-field">Header or parameter name<input type="text" id="api-auth-name" value="Authorization" autocomplete="off"></label>
+              <label class="mcp-field" id="api-auth-format-row">Value format ({key} = the key)<input type="text" id="api-auth-format" value="Bearer {key}" autocomplete="off"></label>
+              <label class="mcp-field">Documentation link (optional)<input type="url" id="api-docs" placeholder="https://developers.intercom.com/docs" autocomplete="off"></label>
+              <label class="mcp-field">What it is for (optional)<input type="text" id="api-description" placeholder="Reply to customers in Intercom" autocomplete="off"></label>
+              <div class="mcp-hint">The key is stored in the company secret store, never in the tool definition. By default employees can only read; you choose the allowed writes next.</div>
+              <button class="pixel-btn small" onclick="window.app._apiCreate()">Add</button>
+            </div>
+          </div>`;
       } else {
         target.innerHTML = `
           <div class="tool-section">
@@ -7128,6 +7232,111 @@ class AppController {
   async _mcpDelete(toolId) {
     if (!confirm('Remove this connector? Employees will lose access to it.')) return;
     const res = await fetch(`/api/mcp/connectors/${encodeURIComponent(toolId)}`, { method: 'DELETE' });
+    if (res.ok) this.openToolList();
+  }
+
+  // ── API keys (relay) ───────────────────────────────────────────────────
+
+  _t(text) { return window.I18N ? I18N.t(text) : text; }
+
+  async _apiCreate() {
+    const val = (id) => document.getElementById(id)?.value.trim() || '';
+    const payload = {
+      name: val('api-name'), base_url: val('api-base-url'), key: val('api-key'),
+      auth_in: val('api-auth-in') || 'header', auth_name: val('api-auth-name'),
+      auth_format: val('api-auth-in') === 'query' ? '{key}' : val('api-auth-format'),
+      docs_url: val('api-docs'), description: val('api-description'),
+    };
+    if (!payload.name || !payload.base_url || !payload.key) {
+      this._showToast(this._t('Name, API address and key are required'), 'error');
+      return;
+    }
+    const res = await fetch('/api/apikeys', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    const keyInput = document.getElementById('api-key');
+    if (keyInput) keyInput.value = '';
+    if (!res.ok) {
+      this._showToast(this._t('Error: ' + (data.detail || res.status)), 'error');
+      return;
+    }
+    this._showToast(this._t('API key added'), 'success');
+    this.openToolDetail(data.tool_id);
+  }
+
+  _apiReadRules(box) {
+    const mode = box.querySelector('.api-writes-mode').value;
+    const writes = box.querySelector('.api-writes').value.split('\n').map(l => l.trim()).filter(Boolean);
+    return {
+      read_only: mode !== 'all',
+      allowed_writes: mode === 'listed' ? writes : (mode === 'all' ? writes : []),
+      approval: box.querySelector('.api-approval').checked,
+    };
+  }
+
+  _apiMarkCustom(empId) {
+    const panel = document.querySelector(`.mcp-emp-panel[data-api-emp="${empId}"]`);
+    if (panel) panel.dataset.custom = '1';
+    document.querySelector(`.mcp-custom-badge[data-badge="api-${empId}"]`)?.classList.remove('hidden');
+  }
+
+  _apiResetPersonal(empId) {
+    const panel = document.querySelector(`.mcp-emp-panel[data-api-emp="${empId}"]`);
+    const shared = document.querySelector('.api-rules[data-rules="shared"]');
+    if (!panel || !shared) return;
+    panel.dataset.custom = '0';
+    const box = panel.querySelector('.api-rules');
+    box.querySelector('.api-writes-mode').value = shared.querySelector('.api-writes-mode').value;
+    box.querySelector('.api-writes').value = shared.querySelector('.api-writes').value;
+    box.querySelector('.api-approval').checked = shared.querySelector('.api-approval').checked;
+    document.querySelector(`.mcp-custom-badge[data-badge="api-${empId}"]`)?.classList.add('hidden');
+  }
+
+  async _apiSave(toolId) {
+    const shared = document.querySelector('.api-rules[data-rules="shared"]');
+    const payload = {
+      allowed_users: [...document.querySelectorAll('.api-employee:checked')].map(i => i.value),
+      rules: shared ? this._apiReadRules(shared) : undefined,
+      employee_rules: {},
+    };
+    document.querySelectorAll('.mcp-emp-panel[data-api-emp]').forEach(panel => {
+      payload.employee_rules[panel.dataset.apiEmp] = panel.dataset.custom === '1'
+        ? this._apiReadRules(panel.querySelector('.api-rules')) : null;
+    });
+    const res = await fetch(`/api/tools/${encodeURIComponent(toolId)}/api-access`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    this._showToast(res.ok ? this._t('Saved') : this._t('Error: ' + (data.detail || res.status)), res.ok ? 'success' : 'error');
+    if (res.ok) this.openToolDetail(toolId);
+  }
+
+  async _apiReplaceKey(toolId) {
+    const input = document.getElementById('api-new-key');
+    const key = input?.value.trim();
+    if (!key) return;
+    const res = await fetch(`/api/tools/${encodeURIComponent(toolId)}/api-key`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }),
+    });
+    input.value = '';
+    this._showToast(this._t(res.ok ? 'Key replaced' : 'Save failed'), res.ok ? 'success' : 'error');
+    if (res.ok) this.openToolDetail(toolId);
+  }
+
+  async _apiResolve(toolId, reqId, decision) {
+    const res = await fetch(`/api/tools/${encodeURIComponent(toolId)}/api-requests/${encodeURIComponent(reqId)}/${decision}`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    const item = data.request || {};
+    let msg = decision === 'approve' ? 'Sent' : 'Rejected';
+    if (decision === 'approve' && item.status === 'failed') msg = 'Call failed';
+    this._showToast(this._t(res.ok ? msg : 'Error: ' + (data.detail || res.status)), res.ok && item.status !== 'failed' ? 'success' : 'error');
+    this.openToolDetail(toolId);
+  }
+
+  async _apiDelete(toolId) {
+    if (!confirm(this._t('Remove this API key? It is deleted from the secret store and employees lose access.'))) return;
+    const res = await fetch(`/api/apikeys/${encodeURIComponent(toolId)}`, { method: 'DELETE' });
     if (res.ok) this.openToolList();
   }
 

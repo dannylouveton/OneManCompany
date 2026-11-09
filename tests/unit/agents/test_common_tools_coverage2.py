@@ -315,15 +315,15 @@ class TestRequestApiKey:
 
     @pytest.mark.asyncio
     async def test_already_exists(self, monkeypatch):
-        import os
         from onemancompany.agents.common_tools import request_api_key
-        monkeypatch.setenv("STRIPE_API_KEY", "sk-existing")
+        monkeypatch.setattr("onemancompany.core.api_tools.granted_apis",
+                            lambda emp: [{"api": "stripe_api", "name": "Stripe"}])
         result = await request_api_key.ainvoke({
             "service_name": "stripe",
             "reason": "Need it",
             "employee_id": "00010",
         })
-        assert result["status"] == "already_exists"
+        assert result["status"] == "already_granted"
 
 
 # ---------------------------------------------------------------------------
