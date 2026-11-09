@@ -94,3 +94,16 @@ def test_setup_docker(tmp_path, monkeypatch):
     assert "# keep me" in cfg and "url: ws://127.0.0.1:8100" in cfg
     for name in ("OMC_RUNNER_TOKEN", "OMC_INTERNAL_KEY"):
         monkeypatch.delenv(name, raising=False)
+
+
+def test_connector_dirs_mounts_project_folder(tmp_path, monkeypatch):
+    from onemancompany.runner import setup
+
+    project = tmp_path / "mcp-server"
+    (project / "dist").mkdir(parents=True)
+    (project / "package.json").write_text("{}")
+    (project / "dist" / "index.js").write_text("")
+    tools = {"photonet": {"mcp": {"command": "/mac/node", "args": [str(project / "dist" / "index.js")]}},
+             "remote": {"mcp": {"type": "http", "url": "https://x"}}}
+    monkeypatch.setattr("onemancompany.core.mcp_tools.list_mcp_tools", lambda: tools)
+    assert setup.connector_dirs() == [str(project)]

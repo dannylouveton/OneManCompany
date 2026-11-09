@@ -118,6 +118,11 @@ def main(argv: list[str]) -> None:
         if spec.get("url"):
             asyncio.run(_bridge(spec))
         else:
+            command = str(spec["command"])
+            if os.environ.get("OMC_REMOTE_CONNECTORS") == "1" and os.path.isabs(command) and not os.path.exists(command):
+                # A path from the control plane's machine (e.g. a Mac's node):
+                # use the runner's own interpreter of the same name.
+                spec["command"] = os.path.basename(command)
             env = {str(k): str(v) for k, v in (spec.get("env") or {}).items()}
             _exec(str(spec["command"]), [str(a) for a in spec.get("args", [])], env, spec.get("cwd"))
         return

@@ -341,7 +341,9 @@ def agent_sandbox_settings() -> dict | None:
     secrets += [str(home / p[2:]) for p in _SANDBOX_DENY_READ_HOME]
     secrets += [str(p) for p in expand(cfg.get("deny_read"))]
     secrets = list(dict.fromkeys(secrets))
-    personal = [str(home / p[2:]) for p in _SANDBOX_PERSONAL_DIRS] + [str(Path(SOURCE_ROOT).resolve())]
+    ceo_homes = list(dict.fromkeys([home, *([Path(config_home)] if config_home else [])]))
+    personal = [str(h / p[2:]) for h in ceo_homes for p in _SANDBOX_PERSONAL_DIRS]
+    personal.append(str(Path(SOURCE_ROOT).resolve()))
 
     deny: list[str] = []
     for path in secrets:
