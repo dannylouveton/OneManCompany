@@ -104,7 +104,12 @@ def _build_conversation_prompt(
     """Build a prompt with conversation history for the executor."""
     from onemancompany.core.config import employee_configs, get_workspace_dir, settings
 
+    from onemancompany.core.i18n import language_directive
+
     lines = []
+    lang_section = language_directive()
+    if lang_section:
+        lines.append(lang_section + "\n")
     lines.append("You are in a conversation with the CEO.")
     cfg = employee_configs.get(conversation.employee_id)
     provider = (cfg.api_provider if cfg and cfg.api_provider else settings.default_api_provider) or "unknown"
@@ -259,6 +264,9 @@ def _resolve_conversation_work_dir(conversation: Conversation) -> str:
 class _BaseConversationAdapter:
     """Shared send logic — all executor types use the same prompt + execute flow."""
 
+    # When True, EA chat goes through executor.execute() like other conversations
+    ea_chat_via_executor: bool = False
+
     def _prepare_prompt(self, prompt: str, conversation: Conversation) -> str:
         """Hook for subclasses to transform the prompt before execution."""
         return prompt
@@ -268,8 +276,10 @@ class _BaseConversationAdapter:
     ) -> str:
         from onemancompany.core.runtime_context import _interaction_type, _interaction_work_dir
 
-        # EA chat: use a one-shot agent with full tools (except HR role tools)
-        if conversation.type == ConversationType.EA_CHAT:
+        # EA chat: use a one-shot agent with full tools (except HR role tools),
+        # unless the adapter runs EA chat through the employee's own executor
+        # (Claude Code sessions: same tools via MCP, billed to the subscription).
+        if conversation.type == ConversationType.EA_CHAT and not self.ea_chat_via_executor:
             return await self._send_ea_chat(conversation, messages, new_message)
 
         executor = _get_employee_executor(conversation.employee_id)
@@ -348,7 +358,9 @@ class LangChainAdapter(_BaseConversationAdapter):
 
 @register_adapter(EXECUTOR_TYPE_CLAUDE_SESSION)
 class ClaudeSessionAdapter(_BaseConversationAdapter):
-    pass
+    # Claude Code sessions already expose the employee's tools over MCP, so the
+    # EA chat runs in the CLI session instead of a direct Anthropic API call.
+    ea_chat_via_executor = True
 
 
 @register_adapter(EXECUTOR_TYPE_SUBPROCESS)
