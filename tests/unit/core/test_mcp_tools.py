@@ -127,3 +127,24 @@ class TestSessionIntegration:
         assert build_mcp_config("00004")["mcpServers"]["shop"]["url"] == "https://shop.example/mcp"
         assert "shop" not in build_mcp_config("00003")["mcpServers"]
         assert disallowed_mcp_tools_for("00004") == ["mcp__shop__refund_payment"]
+
+
+class TestPersonalActions:
+    def test_personal_list_overrides_shared_one(self, tools_dir):
+        tool_id = mcp_tools.create_custom("Shop", "https://shop.example/mcp")
+        mcp_tools.update_access(tool_id, allowed_users=["00004", "00006"], disallowed_tools=["refund_payment", "send_email"])
+        mcp_tools.update_access(tool_id, employee_actions={"00006": ["send_email"]})
+
+        assert mcp_tools.disallowed_for("00004") == ["mcp__shop__refund_payment", "mcp__shop__send_email"]
+        assert mcp_tools.disallowed_for("00006") == ["mcp__shop__send_email"]
+
+        # Back to the shared settings
+        mcp_tools.update_access(tool_id, employee_actions={"00006": None})
+        assert mcp_tools.disallowed_for("00006") == ["mcp__shop__refund_payment", "mcp__shop__send_email"]
+        assert "employee_actions" not in mcp_tools.load_tool(tool_id)
+
+    def test_empty_personal_list_allows_everything(self, tools_dir):
+        tool_id = mcp_tools.create_custom("Shop", "https://shop.example/mcp")
+        mcp_tools.update_access(tool_id, allowed_users=["00006"], disallowed_tools=["refund_payment"],
+                                employee_actions={"00006": []})
+        assert mcp_tools.disallowed_for("00006") == []

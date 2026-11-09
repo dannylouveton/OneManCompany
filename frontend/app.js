@@ -6833,26 +6833,41 @@ class AppController {
         </div>`;
     },
 
-    /** MCP connector: connection, access per employee, allowed actions */
+    /** MCP connector: connection, access per employee, allowed actions (shared + personal) */
     mcp: (toolId, s, esc) => {
       const missing = s.missing_secrets || [];
       const status = missing.length
         ? `<div class="mcp-warning">Missing key: ${missing.map(esc).join(', ')}</div>`
         : '';
-      const employees = (s.employees || []).map(e => `
-        <label class="mcp-check${e.claude_code ? '' : ' mcp-check-disabled'}">
-          <input type="checkbox" class="mcp-employee" value="${esc(e.id)}" ${e.granted ? 'checked' : ''} ${e.claude_code ? '' : 'disabled'}>
-          <span>${esc(e.name)}${e.nickname ? ' (' + esc(e.nickname) + ')' : ''}</span>
-          ${e.claude_code ? '' : '<span class="mcp-hint">Claude Code mode only</span>'}
-        </label>`).join('') || '<span class="empty-hint">No employees</span>';
-      const actions = (s.actions || []).map(a => `
+      const allActions = s.actions || [];
+      const actionBoxes = (cls, blocked, extra = '') => allActions.map(a => `
         <label class="mcp-check" title="${esc(a.description || '')}">
-          <input type="checkbox" class="mcp-action" value="${esc(a.name)}" ${a.allowed ? 'checked' : ''}>
+          <input type="checkbox" class="${cls}" value="${esc(a.name)}" ${blocked.includes(a.name) ? '' : 'checked'} ${extra}>
           <span class="mcp-action-name">${esc(a.name)}</span>
           <span class="mcp-hint">${esc(a.description || '')}</span>
         </label>`).join('');
+      const employees = (s.employees || []).map(e => {
+        const personal = s.tested && allActions.length ? `
+          <div class="mcp-emp-panel hidden" data-emp="${esc(e.id)}" data-custom="${e.custom_actions ? '1' : '0'}">
+            <div class="mcp-hint" style="margin-bottom:3px;">Actions for this employee only. Changing them makes them personal.</div>
+            ${actionBoxes('mcp-emp-action', e.disallowed_tools || [], `data-emp="${esc(e.id)}" onchange="window.app._mcpMarkCustom('${esc(e.id)}')"`)}
+            <button class="pixel-btn small secondary" onclick="window.app._mcpResetPersonal('${esc(e.id)}')">Use shared settings</button>
+          </div>` : '';
+        return `
+        <div class="mcp-emp-row">
+          <label class="mcp-check${e.claude_code ? '' : ' mcp-check-disabled'}">
+            <input type="checkbox" class="mcp-employee" value="${esc(e.id)}" ${e.granted ? 'checked' : ''} ${e.claude_code ? '' : 'disabled'}>
+            <span>${esc(e.name)}${e.nickname ? ' (' + esc(e.nickname) + ')' : ''}</span>
+            ${e.claude_code ? '' : '<span class="mcp-hint">Claude Code mode only</span>'}
+            <span class="perm-tag mcp-custom-badge${e.custom_actions ? '' : ' hidden'}" data-badge="${esc(e.id)}">Personalized</span>
+          </label>
+          ${personal ? `<button class="pixel-btn small secondary mcp-emp-toggle" onclick="window.app._mcpTogglePersonal('${esc(e.id)}')">Actions</button>` : ''}
+        </div>
+        ${personal}`;
+      }).join('') || '<span class="empty-hint">No employees</span>';
+      const shared = allActions.length ? actionBoxes('mcp-action', allActions.filter(a => !a.allowed).map(a => a.name)) : '';
       const actionsBody = s.tested
-        ? (actions || '<span class="empty-hint">No actions</span>')
+        ? (shared || '<span class="empty-hint">No actions</span>')
         : '<span class="empty-hint">Test the connection to list its actions</span>';
       return `
         <div class="tool-section" data-mcp-tool="${esc(toolId)}">
@@ -6871,7 +6886,7 @@ class AppController {
         <div class="tool-section">
           <div class="tool-section-title">Allowed actions</div>
           <div class="tool-section-body">
-            <div class="mcp-hint" style="margin-bottom:4px;">Unchecked actions are blocked, even without confirmation prompts.</div>
+            <div class="mcp-hint" style="margin-bottom:4px;">Shared settings for every employee without personal actions. Unchecked actions are blocked, even without confirmation prompts.</div>
             ${actionsBody}
           </div>
         </div>
@@ -7070,11 +7085,39 @@ class AppController {
     this._mcpShowProbe(toolId, probe);
   }
 
+  _mcpTogglePersonal(empId) {
+    document.querySelector(`.mcp-emp-panel[data-emp="${empId}"]`)?.classList.toggle('hidden');
+  }
+
+  _mcpMarkCustom(empId) {
+    const panel = document.querySelector(`.mcp-emp-panel[data-emp="${empId}"]`);
+    if (panel) panel.dataset.custom = '1';
+    document.querySelector(`.mcp-custom-badge[data-badge="${empId}"]`)?.classList.remove('hidden');
+  }
+
+  _mcpResetPersonal(empId) {
+    const panel = document.querySelector(`.mcp-emp-panel[data-emp="${empId}"]`);
+    if (!panel) return;
+    panel.dataset.custom = '0';
+    const shared = new Map([...document.querySelectorAll('.mcp-action')].map(i => [i.value, i.checked]));
+    panel.querySelectorAll('.mcp-emp-action').forEach(i => { i.checked = shared.get(i.value) ?? true; });
+    document.querySelector(`.mcp-custom-badge[data-badge="${empId}"]`)?.classList.add('hidden');
+  }
+
   async _mcpSave(toolId) {
     const allowed_users = [...document.querySelectorAll('.mcp-employee:checked')].map(i => i.value);
     const actionBoxes = [...document.querySelectorAll('.mcp-action')];
     const payload = { allowed_users };
     if (actionBoxes.length) payload.disallowed_tools = actionBoxes.filter(i => !i.checked).map(i => i.value);
+    const panels = [...document.querySelectorAll('.mcp-emp-panel')];
+    if (panels.length) {
+      payload.employee_actions = {};
+      for (const panel of panels) {
+        payload.employee_actions[panel.dataset.emp] = panel.dataset.custom === '1'
+          ? [...panel.querySelectorAll('.mcp-emp-action')].filter(i => !i.checked).map(i => i.value)
+          : null;
+      }
+    }
     const res = await fetch(`/api/tools/${encodeURIComponent(toolId)}/mcp-access`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });

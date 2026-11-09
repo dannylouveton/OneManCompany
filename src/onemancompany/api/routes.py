@@ -5336,9 +5336,10 @@ async def get_tool_icon(tool_id: str):
 def _mcp_section(tool_id: str, tool_data: dict) -> dict:
     """Access + actions section for an MCP connector tool."""
     from onemancompany.core.config import CEO_ID as _CEO, employee_configs
-    from onemancompany.core.mcp_tools import missing_secrets
+    from onemancompany.core.mcp_tools import effective_disallowed, missing_secrets
 
     allowed = {str(u) for u in (tool_data.get("allowed_users") or [])}
+    personal = tool_data.get("employee_actions") or {}
     employees = []
     for emp_id, emp in sorted(_load_all().items()):
         if emp_id == _CEO:
@@ -5351,6 +5352,8 @@ def _mcp_section(tool_id: str, tool_data: dict) -> dict:
             "nickname": emp.get("nickname", ""),
             "claude_code": str(hosting) in ("self", "HostingMode.SELF"),
             "granted": emp_id in allowed,
+            "custom_actions": emp_id in personal,
+            "disallowed_tools": effective_disallowed(tool_data, emp_id),
         })
     blocked = set(tool_data.get("disallowed_tools") or [])
     actions = [
@@ -5440,13 +5443,16 @@ async def mcp_test_connector(tool_id: str) -> dict:
 
 @router.put("/api/tools/{tool_id}/mcp-access")
 async def mcp_update_access(tool_id: str, body: dict) -> dict:
-    """Body: {"allowed_users": [...], "disallowed_tools": [...]} (each optional)."""
+    """Body (each key optional): {"allowed_users": [...], "disallowed_tools": [...],
+    "employee_actions": {"00006": [...blocked] | null}}."""
     from onemancompany.core import mcp_tools
     from onemancompany.core.claude_session import stop_employee_daemons
 
     before = mcp_tools.load_tool(tool_id) or {}
     try:
-        data = mcp_tools.update_access(tool_id, body.get("allowed_users"), body.get("disallowed_tools"))
+        data = mcp_tools.update_access(
+            tool_id, body.get("allowed_users"), body.get("disallowed_tools"), body.get("employee_actions"),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     # Running CLI sessions keep their old connectors: restart the affected ones

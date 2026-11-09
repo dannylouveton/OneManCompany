@@ -247,9 +247,17 @@ def disallowed_for(employee_id: str) -> list[str]:
     for tool_id, data in list_mcp_tools().items():
         if not _granted(data, employee_id):
             continue
-        for tool in data.get("disallowed_tools") or []:
+        for tool in effective_disallowed(data, employee_id):
             names.append(f"mcp__{tool_id}__{tool}")
     return names
+
+
+def effective_disallowed(data: dict, employee_id: str) -> list[str]:
+    """Blocked actions for one employee: personal list if set, else the tool's."""
+    personal = (data.get("employee_actions") or {}).get(str(employee_id))
+    if isinstance(personal, dict) and isinstance(personal.get("disallowed_tools"), list):
+        return list(personal["disallowed_tools"])
+    return list(data.get("disallowed_tools") or [])
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +431,13 @@ def import_claude_code_server(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def update_access(tool_id: str, allowed_users: list[str] | None = None,
-                  disallowed_tools: list[str] | None = None) -> dict:
+                  disallowed_tools: list[str] | None = None,
+                  employee_actions: dict[str, list[str] | None] | None = None) -> dict:
+    """Update who may use a connector and which actions are blocked.
+
+    ``employee_actions`` maps an employee id to their personal blocked list,
+    or to None to fall back to the tool's shared list.
+    """
     data = load_tool(tool_id)
     if not data or data.get("type") != TOOL_TYPE_MCP:
         raise ValueError("Not an MCP connector")
@@ -431,6 +445,17 @@ def update_access(tool_id: str, allowed_users: list[str] | None = None,
         data["allowed_users"] = sorted({str(u) for u in allowed_users})
     if disallowed_tools is not None:
         data["disallowed_tools"] = sorted({str(t) for t in disallowed_tools})
+    if employee_actions is not None:
+        personal = dict(data.get("employee_actions") or {})
+        for emp_id, blocked in employee_actions.items():
+            if blocked is None:
+                personal.pop(str(emp_id), None)
+            else:
+                personal[str(emp_id)] = {"disallowed_tools": sorted({str(t) for t in blocked})}
+        if personal:
+            data["employee_actions"] = personal
+        else:
+            data.pop("employee_actions", None)
     save_tool(tool_id, data)
     return data
 

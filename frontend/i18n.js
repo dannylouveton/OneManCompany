@@ -17,6 +17,11 @@
 
   const DICTS = {
     fr: {
+      "Actions": "Actions",
+      "Personalized": "Personnalisé",
+      "Use shared settings": "Revenir aux réglages communs",
+      "Actions for this employee only. Changing them makes them personal": "Actions de cet employé uniquement. Les modifier les rend personnelles",
+      "Shared settings for every employee without personal actions. Unchecked actions are blocked, even without confirmation prompts": "Réglages communs à tous les employés sans actions personnelles. Les actions décochées sont bloquées, même sans demande de confirmation",
       "Add a tool": "Ajouter un outil",
       "Catalog": "Catalogue",
       "My Claude Code connectors": "Mes connecteurs Claude Code",
