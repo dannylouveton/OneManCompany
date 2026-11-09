@@ -376,7 +376,9 @@ def agent_sandbox_settings() -> dict | None:
             "filesystem": {
                 "allowWrite": [str(d) for d in work_dirs],
                 "denyWrite": secrets,
-                "denyRead": secrets + personal,
+                # In the container, /proc is shared with the sandbox: hide
+                # other processes' environments (CLI token, signing key).
+                "denyRead": secrets + personal + (["/proc/*/environ"] if nested else []),
                 "allowRead": [str(d) for d in work_dirs + read_dirs],
             },
             "network": {"deniedDomains": local_api},

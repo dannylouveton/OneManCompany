@@ -14,6 +14,12 @@ services:
       OMC_DATA_ROOT: ${OMC_DATA_ROOT}
     ports:
       - "127.0.0.1:${RUNNER_PORT:-8100}:8100"
+    # Claude Code's shell sandbox (bubblewrap) needs user namespaces, which
+    # Docker's default seccomp profile blocks. The container stays
+    # unprivileged (no added capabilities, non-root user).
+    security_opt:
+      - seccomp=unconfined
+    cap_drop: [ALL]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
