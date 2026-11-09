@@ -1,6 +1,8 @@
 """Base agent utilities shared across all LangChain agents."""
 
 from __future__ import annotations
+
+import re
 import asyncio
 import contextlib
 from datetime import datetime, timezone
@@ -150,6 +152,14 @@ def _resolve_provider_key(provider_name: str, employee_api_key: str) -> str:
     return ""
 
 
+_NO_TEMPERATURE_MODEL_RE = re.compile(r"claude-(?:opus|sonnet|haiku|fable|mythos)-(?:[5-9]|\d{2,})")
+
+
+def _anthropic_accepts_temperature(model: str) -> bool:
+    """Claude 5+ models reject the ``temperature`` parameter (400 invalid_request_error)."""
+    return not _NO_TEMPERATURE_MODEL_RE.search((model or "").lower())
+
+
 def make_llm(employee_id: str = "", temperature: float | None = None) -> BaseChatModel:
     """Create an LLM instance, using per-agent model config from employees/{id}/profile.yaml.
 
@@ -232,7 +242,7 @@ def make_llm(employee_id: str = "", temperature: float | None = None) -> BaseCha
                 model=model,
                 api_key=effective_key,
                 base_url=base_url,
-                temperature=effective_temp,
+                temperature=effective_temp if _anthropic_accepts_temperature(model) else None,
                 max_retries=3,
                 timeout=300.0,
                 default_headers=extra_headers or None,

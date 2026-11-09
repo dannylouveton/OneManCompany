@@ -148,3 +148,4 @@ class TestLanguageRoutes:
         assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["language"] == "fr"
         assert result["renamed"] == {"00001": "Le Patron", "00002": "Le Renard", "00007": "Le Renard"}
         assert save.await_count == 3
+
