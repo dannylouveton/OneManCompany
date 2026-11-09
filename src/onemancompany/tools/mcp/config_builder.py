@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from onemancompany.core.config import (
-    EMPLOYEES_DIR, ENV_OMC_EMPLOYEE_ID, ENV_OMC_PROJECT_DIR,
+    DATA_ROOT, ENV_OMC_DATA_ROOT, EMPLOYEES_DIR, ENV_OMC_EMPLOYEE_ID, ENV_OMC_PROJECT_DIR,
     ENV_OMC_PROJECT_ID, ENV_OMC_SERVER_URL, ENV_OMC_TASK_ID,
     MCP_CONFIG_FILENAME, TOOLS_DIR, WORKSPACE_DIR_NAME,
     write_text_utf,
@@ -43,6 +43,7 @@ def build_mcp_config(
                 ENV_OMC_PROJECT_ID: project_id,
                 ENV_OMC_PROJECT_DIR: project_dir,
                 ENV_OMC_SERVER_URL: server_url,
+                ENV_OMC_DATA_ROOT: str(DATA_ROOT.resolve()),
             },
         },
     }

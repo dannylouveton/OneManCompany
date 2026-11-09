@@ -16,7 +16,15 @@ SOURCE_ROOT = Path(__file__).parent.parent.parent.parent
 # Data root — all runtime/company data lives under cwd/.onemancompany/
 # This allows the package to be installed anywhere while data stays portable.
 DATA_DIR_NAME = ".onemancompany"
-DATA_ROOT = Path.cwd() / DATA_DIR_NAME
+# Subprocesses (e.g. the MCP server spawned by Claude CLI in an employee
+# workspace) receive the real data root via OMC_DATA_ROOT, since their cwd
+# is not the company root.
+ENV_OMC_DATA_ROOT = "OMC_DATA_ROOT"
+DATA_ROOT = (
+    Path(os.environ[ENV_OMC_DATA_ROOT])
+    if os.environ.get(ENV_OMC_DATA_ROOT)
+    else Path.cwd() / DATA_DIR_NAME
+)
 
 
 COMPANY_DIR = DATA_ROOT / "company"

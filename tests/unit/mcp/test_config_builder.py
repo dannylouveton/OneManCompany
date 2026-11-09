@@ -113,3 +113,10 @@ def test_claude_session_uses_strict_mcp_config():
     source = inspect.getsource(claude_session)
     assert '"--strict-mcp-config"' in source
     assert '"--setting-sources", "project,local"' in source
+
+
+def test_mcp_server_gets_data_root():
+    """The MCP server runs in the employee workspace: it needs the real data root."""
+    from onemancompany.core.config import DATA_ROOT
+    env = build_mcp_config("00004")["mcpServers"]["onemancompany"]["env"]
+    assert env["OMC_DATA_ROOT"] == str(DATA_ROOT.resolve())
