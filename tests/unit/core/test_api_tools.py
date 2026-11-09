@@ -150,3 +150,16 @@ def test_list_files_falls_back_when_rg_is_not_executable(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", denied)
     assert project_archive._list_files_ripgrep(tmp_path, 10) is None
+
+
+def test_agent_sandbox_read_only_dirs(tmp_path, monkeypatch):
+    from onemancompany.core import claude_session
+
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    monkeypatch.setattr(config_mod, "DATA_ROOT", tmp_path / "data")
+    monkeypatch.setattr(config_mod, "load_app_config", lambda: {"agent_sandbox": {"read_dirs": [str(wiki)]}})
+    s = claude_session.agent_sandbox_settings()
+    assert str(wiki) in s["sandbox"]["filesystem"]["allowRead"]
+    assert str(wiki) not in s["sandbox"]["filesystem"]["allowWrite"]
+    assert f"Edit(/{wiki}/**)" in s["permissions"]["deny"]

@@ -302,6 +302,7 @@ def agent_sandbox_settings() -> dict | None:
         agent_sandbox:
           enabled: true          # default
           allow_dirs: []         # extra folders employees may read and write
+          read_dirs: []          # extra folders employees may only read
           deny_read: []          # extra secret files/folders
 
     * Shell commands run in the OS sandbox (Seatbelt on macOS, bubblewrap on
@@ -321,6 +322,7 @@ def agent_sandbox_settings() -> dict | None:
     home = Path.home()
     expand = lambda items: [Path(str(p)).expanduser().resolve() for p in (items or [])]  # noqa: E731
     work_dirs = list(dict.fromkeys([Path(DATA_ROOT).resolve(), *expand(cfg.get("allow_dirs")), *expand(cfg.get("allow_write"))]))
+    read_dirs = [d for d in expand(cfg.get("read_dirs")) if d not in work_dirs]
 
     secrets = [str(DATA_ROOT / DOT_ENV_FILENAME), str(SOURCE_ROOT / DOT_ENV_FILENAME)]
     secrets += [str(home / p[2:]) for p in _SANDBOX_DENY_READ_HOME]
@@ -337,6 +339,8 @@ def agent_sandbox_settings() -> dict | None:
     for path in _outside(work_dirs, home):
         deny += [f"Edit({_rule(path)})", f"Edit({_rule(path)}/**)"] if path.is_dir() else [f"Edit({_rule(path)})"]
     deny += [f"Edit({_rule(home)}/.*)", f"Edit({_rule(home)}/.*/**)"]
+    for path in read_dirs:  # read-only folders, wherever they are
+        deny += [f"Edit({_rule(path)})", f"Edit({_rule(path)}/**)"]
     for system_dir in ("/Applications", "/Library", "/etc", "/usr/local", "/opt"):
         deny.append(f"Edit({_rule(system_dir)}/**)")
     # Shell commands must not call OneManCompany's own API (approve their
@@ -353,13 +357,13 @@ def agent_sandbox_settings() -> dict | None:
                 "allowWrite": [str(d) for d in work_dirs],
                 "denyWrite": secrets,
                 "denyRead": secrets + personal,
-                "allowRead": [str(d) for d in work_dirs],
+                "allowRead": [str(d) for d in work_dirs + read_dirs],
             },
             "network": {"deniedDomains": local_api},
         },
         "permissions": {
             "deny": list(dict.fromkeys(deny)),
-            "additionalDirectories": [str(d) for d in work_dirs],
+            "additionalDirectories": [str(d) for d in work_dirs + read_dirs],
             "blockReadsOutsideWorkingDirectories": True,
         },
     }
