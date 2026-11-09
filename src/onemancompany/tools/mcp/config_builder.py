@@ -73,7 +73,49 @@ def build_mcp_config(
             },
         }
 
+    # Extra MCP servers the CEO granted in config.yaml (`mcp_servers`)
+    servers.update(company_mcp_servers_for(employee_id, reserved=set(servers)))
+
     return {"mcpServers": servers}
+
+
+_MCP_SPEC_KEYS = {"command", "args", "env", "type", "url", "headers", "cwd"}
+
+
+def company_mcp_servers_for(employee_id: str, reserved: set[str] | None = None) -> dict:
+    """MCP servers from config.yaml ``mcp_servers`` that *employee_id* may use.
+
+    Each entry is a Claude ``--mcp-config`` server spec (command/args/env or
+    type/url/headers) plus an optional ``employees`` list restricting it to
+    specific employee IDs. Without ``employees`` the server is granted to
+    every Claude Code employee.
+    """
+    from loguru import logger
+    from onemancompany.core.config import load_app_config
+
+    reserved = reserved or set()
+    raw = load_app_config().get("mcp_servers") or {}
+    if not isinstance(raw, dict):
+        logger.warning("config.yaml mcp_servers must be a mapping; ignored")
+        return {}
+
+    granted: dict = {}
+    for name, spec in raw.items():
+        if not isinstance(spec, dict) or name in reserved:
+            if name in reserved:
+                logger.warning("config.yaml mcp_servers: '{}' is reserved; ignored", name)
+            continue
+        employees = spec.get("employees")
+        if employees is not None and str(employee_id) not in {str(e) for e in employees}:
+            continue
+        entry = {k: v for k, v in spec.items() if k in _MCP_SPEC_KEYS}
+        if "command" not in entry and "url" not in entry:
+            logger.warning("config.yaml mcp_servers: '{}' has no command or url; ignored", name)
+            continue
+        if "env" in entry:
+            entry["env"] = {str(k): str(v) for k, v in (entry["env"] or {}).items()}
+        granted[str(name)] = entry
+    return granted
 
 
 def write_mcp_config(

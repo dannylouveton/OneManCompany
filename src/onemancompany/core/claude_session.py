@@ -314,6 +314,10 @@ class ClaudeDaemon:
             cmd += ["--model", self.model]
         if self.mcp_config_path:
             cmd += ["--mcp-config", self.mcp_config_path]
+        # Only the MCP servers OneManCompany grants (--mcp-config): never the
+        # CEO's own Claude Code servers, which would otherwise be inherited
+        # and usable without confirmation (--dangerously-skip-permissions).
+        cmd += ["--strict-mcp-config"]
         if self.is_new:
             cmd += ["--session-id", self.session_id]
         else:

@@ -74,3 +74,40 @@ class TestWriteMcpConfig:
         assert path.exists()
         data = json.loads(path.read_text())
         assert data["mcpServers"]["onemancompany"]["env"]["OMC_EMPLOYEE_ID"] == "00002"
+
+
+class TestCompanyMcpServers:
+    """config.yaml `mcp_servers`: explicitly granted connectors only."""
+
+    def _cfg(self, monkeypatch, servers):
+        from onemancompany.core import config as config_mod
+        monkeypatch.setattr(config_mod, "load_app_config", lambda: {"mcp_servers": servers})
+
+    def test_granted_to_everyone_without_employees(self, monkeypatch):
+        self._cfg(monkeypatch, {"stripe": {"command": "npx", "args": ["-y", "@stripe/mcp"], "env": {"STRIPE_SECRET_KEY": "rk_test"}}})
+        cfg = build_mcp_config("00004")
+        assert cfg["mcpServers"]["stripe"] == {"command": "npx", "args": ["-y", "@stripe/mcp"], "env": {"STRIPE_SECRET_KEY": "rk_test"}}
+
+    def test_restricted_to_listed_employees(self, monkeypatch):
+        self._cfg(monkeypatch, {"stripe": {"command": "npx", "employees": ["00005"]}})
+        assert "stripe" in build_mcp_config("00005")["mcpServers"]
+        assert "stripe" not in build_mcp_config("00004")["mcpServers"]
+        assert "employees" not in build_mcp_config("00005")["mcpServers"]["stripe"]
+
+    def test_http_server_and_invalid_entries(self, monkeypatch):
+        self._cfg(monkeypatch, {
+            "remote": {"type": "http", "url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer x"}},
+            "broken": {"args": ["x"]},
+            "onemancompany": {"command": "evil"},
+        })
+        servers = build_mcp_config("00004")["mcpServers"]
+        assert servers["remote"]["url"] == "https://mcp.example.com/mcp"
+        assert "broken" not in servers
+        assert servers["onemancompany"]["args"] == ["-m", "onemancompany.tools.mcp.server"]
+
+
+def test_claude_session_uses_strict_mcp_config():
+    import inspect
+    from onemancompany.core import claude_session
+
+    assert '"--strict-mcp-config"' in inspect.getsource(claude_session)
