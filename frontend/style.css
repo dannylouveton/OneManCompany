@@ -7102,3 +7102,46 @@ button:disabled, [aria-disabled="true"] {
 .api-pending { border: 1px solid #ffb347; padding: 4px 6px; margin-bottom: 4px; font-size: 7px; }
 .api-body { font-size: 8px; max-height: 120px; overflow: auto; background: #0d0d14; padding: 4px; margin: 3px 0; white-space: pre-wrap; }
 .api-log-row { display: grid; grid-template-columns: 70px 40px 1fr auto; gap: 6px; font-size: 7px; padding: 2px 0; border-bottom: 1px solid #222; align-items: baseline; word-break: break-all; }
+
+/* Tools panel: readable text. The pixel font stays for titles and buttons;
+   forms, hints, lists and journals use the system font at a legible size. */
+#tool-list-body .tool-detail p,
+#tool-list-body .tool-section-body,
+#tool-list-body .mcp-hint,
+#tool-list-body .mcp-check,
+#tool-list-body .mcp-field,
+#tool-list-body .mcp-warning,
+#tool-list-body .mcp-test-result,
+#tool-list-body .mcp-link,
+#tool-list-body .api-pending,
+#tool-list-body .api-log-row,
+#tool-list-body .empty-hint,
+#tool-list-body .tool-info-row,
+#tool-list-body .tool-file-list {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+#tool-list-body .tool-detail p { font-size: 13px; color: #bbb; }
+#tool-list-body .mcp-hint, #tool-list-body .empty-hint { font-size: 12px; color: #a0a0b0; }
+#tool-list-body .mcp-field { color: #c8c8d4; gap: 4px; margin: 8px 0; }
+#tool-list-body .mcp-field input,
+#tool-list-body .mcp-field textarea,
+#tool-list-body .mcp-field select,
+#tool-list-body .tool-oauth-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 2px;
+}
+#tool-list-body .mcp-endpoint, #tool-list-body .mcp-action-name,
+#tool-list-body .api-body, #tool-list-body code, #tool-list-body .tool-yaml-content {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+#tool-list-body .mcp-check { gap: 8px; padding: 3px 0; }
+#tool-list-body .mcp-check input { margin: 0; }
+#tool-list-body .perm-tag, #tool-list-body .mcp-custom-badge { font-size: 11px; }
+#tool-list-body .api-log-row { font-size: 12px; grid-template-columns: 110px 50px 1fr auto; }
+#tool-list-body .tool-section-body { padding-top: 4px; }
