@@ -261,20 +261,56 @@ _SANDBOX_DENY_READ_HOME = (
 )
 
 
+# The CEO's personal data: shell commands cannot read it (the company
+# folder inside stays readable).
+_SANDBOX_PERSONAL_DIRS = (
+    "~/Documents", "~/Desktop", "~/Downloads", "~/Pictures", "~/Movies", "~/Music",
+    "~/Library/Mobile Documents", "~/Library/CloudStorage", "~/Library/Mail",
+    "~/Library/Messages", "~/Library/Safari", "~/Library/Cookies",
+    "~/Library/Application Support/Google", "~/Library/Application Support/Firefox",
+    "~/Library/Application Support/Claude",
+)
+
+
+def _rule(path: Path | str) -> str:
+    """Absolute path in permission-rule syntax ("//abs/path")."""
+    return "/" + str(path)
+
+
+def _outside(keep: list[Path], root: Path) -> list[Path]:
+    """Every entry under ``root`` that is neither in ``keep`` nor on the way to it."""
+    out: list[Path] = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return out
+    for entry in entries:
+        if any(entry == k for k in keep):
+            continue
+        if any(k.is_relative_to(entry) for k in keep):
+            out += _outside(keep, entry)
+        else:
+            out.append(entry)
+    return out
+
+
 def agent_sandbox_settings() -> dict | None:
-    """Claude Code ``--settings`` that sandbox an employee session, or None if disabled.
+    """Claude Code ``--settings`` that confine an employee session, or None if disabled.
 
     config.yaml::
 
         agent_sandbox:
           enabled: true          # default
-          allow_write: []        # extra writable folders for shell commands
+          allow_dirs: []         # extra folders employees may read and write
           deny_read: []          # extra secret files/folders
 
     * Shell commands run in the OS sandbox (Seatbelt on macOS, bubblewrap on
-      Linux): they cannot read the secret files below and can only write in
-      the company folder and the temp dir. No unsandboxed fallback.
-    * The Read/Edit tools get matching deny rules (they are not sandboxed).
+      Linux): no secrets, none of the CEO's personal folders, writes only in
+      the company folder and the temp dir, no unsandboxed fallback, no access
+      to OneManCompany's local API.
+    * File tools (Read/Write/Edit are not sandboxed): reads limited to the
+      working folders, writes denied everywhere in the home folder outside
+      them (source code, shell profiles, ~/.claude…), secrets denied.
     """
     from onemancompany.core.config import DATA_ROOT, DOT_ENV_FILENAME, SOURCE_ROOT, load_app_config
 
@@ -283,16 +319,26 @@ def agent_sandbox_settings() -> dict | None:
     if cfg.get("enabled", True) is False:
         return None
     home = Path.home()
+    expand = lambda items: [Path(str(p)).expanduser().resolve() for p in (items or [])]  # noqa: E731
+    work_dirs = list(dict.fromkeys([Path(DATA_ROOT).resolve(), *expand(cfg.get("allow_dirs")), *expand(cfg.get("allow_write"))]))
+
     secrets = [str(DATA_ROOT / DOT_ENV_FILENAME), str(SOURCE_ROOT / DOT_ENV_FILENAME)]
     secrets += [str(home / p[2:]) for p in _SANDBOX_DENY_READ_HOME]
-    secrets += [str(Path(p).expanduser()) for p in (cfg.get("deny_read") or [])]
+    secrets += [str(p) for p in expand(cfg.get("deny_read"))]
     secrets = list(dict.fromkeys(secrets))
-    allow_write = [str(DATA_ROOT)] + [str(Path(p).expanduser()) for p in (cfg.get("allow_write") or [])]
-    deny = []
+    personal = [str(home / p[2:]) for p in _SANDBOX_PERSONAL_DIRS] + [str(Path(SOURCE_ROOT).resolve())]
+
+    deny: list[str] = []
     for path in secrets:
-        rule_path = "/" + path  # "//abs/path" = absolute path in permission rules
-        targets = [rule_path, rule_path + "/**"] if Path(path).is_dir() else [rule_path]
+        targets = [_rule(path), _rule(path) + "/**"] if Path(path).is_dir() else [_rule(path)]
         deny += [f"{tool}({t})" for t in targets for tool in ("Read", "Edit")]
+    # Writes with the file tools: nothing in the home folder outside the
+    # working folders (covers source code, ~/.zshrc, ~/.claude, LaunchAgents…).
+    for path in _outside(work_dirs, home):
+        deny += [f"Edit({_rule(path)})", f"Edit({_rule(path)}/**)"] if path.is_dir() else [f"Edit({_rule(path)})"]
+    deny += [f"Edit({_rule(home)}/.*)", f"Edit({_rule(home)}/.*/**)"]
+    for system_dir in ("/Applications", "/Library", "/etc", "/usr/local", "/opt"):
+        deny.append(f"Edit({_rule(system_dir)}/**)")
     # Shell commands must not call OneManCompany's own API (approve their
     # own API calls, change access rights…): only the CEO's browser does.
     port = str(os.environ.get("PORT") or 8000)
@@ -303,10 +349,19 @@ def agent_sandbox_settings() -> dict | None:
             "enabled": True,
             "allowUnsandboxedCommands": False,
             "failIfUnavailable": True,
-            "filesystem": {"allowWrite": allow_write, "denyRead": secrets, "denyWrite": secrets},
+            "filesystem": {
+                "allowWrite": [str(d) for d in work_dirs],
+                "denyWrite": secrets,
+                "denyRead": secrets + personal,
+                "allowRead": [str(d) for d in work_dirs],
+            },
             "network": {"deniedDomains": local_api},
         },
-        "permissions": {"deny": deny},
+        "permissions": {
+            "deny": list(dict.fromkeys(deny)),
+            "additionalDirectories": [str(d) for d in work_dirs],
+            "blockReadsOutsideWorkingDirectories": True,
+        },
     }
 
 class ClaudeDaemon:
