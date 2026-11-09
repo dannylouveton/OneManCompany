@@ -103,7 +103,7 @@ class TestCompanyMcpServers:
         servers = build_mcp_config("00004")["mcpServers"]
         assert servers["remote"]["url"] == "https://mcp.example.com/mcp"
         assert "broken" not in servers
-        assert servers["onemancompany"]["args"] == ["-m", "onemancompany.tools.mcp.server"]
+        assert servers["onemancompany"]["args"][-2:] == ["-m", "onemancompany.tools.mcp.server"]
 
 
 def test_claude_session_uses_strict_mcp_config():

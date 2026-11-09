@@ -124,7 +124,9 @@ class TestSessionIntegration:
         tool_id = mcp_tools.create_custom("Shop", "https://shop.example/mcp")
         mcp_tools.update_access(tool_id, allowed_users=["00004"], disallowed_tools=["refund_payment"])
 
-        assert build_mcp_config("00004")["mcpServers"]["shop"]["url"] == "https://shop.example/mcp"
+        shop = build_mcp_config("00004")["mcpServers"]["shop"]
+        assert shop["args"][-2:] == ["connector", "shop"]
+        assert "url" not in shop and "headers" not in shop  # secrets stay in the launcher
         assert "shop" not in build_mcp_config("00003")["mcpServers"]
         assert disallowed_mcp_tools_for("00004") == ["mcp__shop__refund_payment"]
 
@@ -148,3 +150,17 @@ class TestPersonalActions:
         mcp_tools.update_access(tool_id, allowed_users=["00006"], disallowed_tools=["refund_payment"],
                                 employee_actions={"00006": []})
         assert mcp_tools.disallowed_for("00006") == []
+
+
+class TestNoSecretsInSessionConfig:
+    def test_config_file_never_contains_connector_secrets(self, tools_dir, monkeypatch):
+        import json as _json
+        from onemancompany.tools.mcp.config_builder import build_mcp_config
+
+        monkeypatch.setattr(config_mod, "load_app_config", lambda: {})
+        monkeypatch.setenv("STRIPE_API_KEY", "rk_live_supersecret")
+        tool_id = mcp_tools.create_from_catalog("stripe")
+        mcp_tools.update_access(tool_id, allowed_users=["00005"])
+        dumped = _json.dumps(build_mcp_config("00005"))
+        assert "rk_live_supersecret" not in dumped
+        assert '"connector", "stripe"' in dumped

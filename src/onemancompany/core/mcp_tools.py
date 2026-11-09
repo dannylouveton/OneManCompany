@@ -137,12 +137,11 @@ def slugify(name: str) -> str:
 
 
 def _env_values() -> dict[str, str]:
-    from dotenv import dotenv_values
+    from onemancompany.core.secret_store import get_secret_store
 
-    from onemancompany.core.config import DATA_ROOT, DOT_ENV_FILENAME
-
-    values = {k: v for k, v in dotenv_values(DATA_ROOT / DOT_ENV_FILENAME).items() if v is not None}
-    values.update({k: v for k, v in os.environ.items() if v})
+    store = get_secret_store()
+    values = {k: v for k, v in os.environ.items() if v}
+    values.update({name: v for name in store.names() if (v := store.get(name))})
     return values
 
 
@@ -165,24 +164,10 @@ def missing_secrets(data: dict) -> list[str]:
 
 
 def save_env_values(values: dict[str, str]) -> None:
-    """Persist secrets to .onemancompany/.env and the current process."""
-    from onemancompany.core.config import DATA_ROOT, DOT_ENV_FILENAME, read_text_utf, write_text_utf
+    """Persist secrets through the secret store."""
+    from onemancompany.core.secret_store import get_secret_store
 
-    values = {k: v for k, v in values.items() if v}
-    if not values:
-        return
-    for k, v in values.items():
-        os.environ[k] = v
-    env_path = DATA_ROOT / DOT_ENV_FILENAME
-    lines = read_text_utf(env_path).splitlines() if env_path.exists() else []
-    done = set()
-    for i, line in enumerate(lines):
-        for k, v in values.items():
-            if line.startswith(f"{k}="):
-                lines[i] = f"{k}={v}"
-                done.add(k)
-    lines += [f"{k}={v}" for k, v in values.items() if k not in done]
-    write_text_utf(env_path, "\n".join(lines) + "\n")
+    get_secret_store().set_many(values)
 
 
 def load_tool(tool_id: str) -> dict | None:
@@ -229,6 +214,12 @@ def _granted(data: dict, employee_id: str) -> bool:
 # ---------------------------------------------------------------------------
 # Session integration
 # ---------------------------------------------------------------------------
+
+def granted_tool_ids(employee_id: str) -> list[str]:
+    """Connector tool ids granted to *employee_id* (for the launcher-based config)."""
+    return [tool_id for tool_id, data in list_mcp_tools().items()
+            if tool_id not in RESERVED_SERVER_NAMES and _granted(data, employee_id)]
+
 
 def servers_for(employee_id: str) -> dict[str, dict]:
     """Resolved --mcp-config specs of the connectors granted to *employee_id*."""

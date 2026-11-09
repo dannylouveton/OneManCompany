@@ -32,29 +32,34 @@ def build_mcp_config(
     Tool permissions are resolved dynamically by the MCP server via ToolRegistry.
     """
     python_path = sys.executable
+    data_root = str(DATA_ROOT.resolve())
+    launcher = [python_path, "-m", "onemancompany.tools.mcp.launcher"]
+
+    def internal(command: list[str], env: dict | None = None) -> dict:
+        """OneManCompany-owned server: secrets are loaded inside its process only."""
+        return {
+            "command": launcher[0],
+            "args": [*launcher[1:], "internal", "--", *command],
+            "env": {ENV_OMC_DATA_ROOT: data_root, **(env or {})},
+        }
 
     servers: dict = {
-        "onemancompany": {
-            "command": python_path,
-            "args": ["-m", "onemancompany.tools.mcp.server"],
-            "env": {
+        "onemancompany": internal(
+            [python_path, "-m", "onemancompany.tools.mcp.server"],
+            {
                 ENV_OMC_EMPLOYEE_ID: employee_id,
                 ENV_OMC_TASK_ID: task_id,
                 ENV_OMC_PROJECT_ID: project_id,
                 ENV_OMC_PROJECT_DIR: project_dir,
                 ENV_OMC_SERVER_URL: server_url,
-                ENV_OMC_DATA_ROOT: str(DATA_ROOT.resolve()),
             },
-        },
+        ),
     }
 
     # Add Gmail MCP server if employee has access and server script exists
     gmail_mcp = TOOLS_DIR / "gmail" / "mcp_server.py"
     if gmail_mcp.exists():
-        servers["gmail"] = {
-            "command": python_path,
-            "args": [str(gmail_mcp)],
-        }
+        servers["gmail"] = internal([python_path, str(gmail_mcp)])
 
     # FastSkills MCP — available to all employees with API key configured
     from onemancompany.core.config import settings
@@ -62,22 +67,22 @@ def build_mcp_config(
         emp_dir = EMPLOYEES_DIR / employee_id
         skills_dir = emp_dir / "skills"
         workdir = emp_dir / WORKSPACE_DIR_NAME
-        servers["fastskills"] = {
-            "command": "uvx",
-            "args": [
-                "fastskills",
-                "--skills-dir", str(skills_dir),
-                "--workdir", str(workdir),
-            ],
-            "env": {
-                "SKILLSMP_API_KEY": settings.skillsmp_api_key,
-            },
-        }
+        servers["fastskills"] = internal([
+            "uvx", "fastskills",
+            "--skills-dir", str(skills_dir),
+            "--workdir", str(workdir),
+        ])
 
-    # MCP connectors installed as company tools (Tools panel), granted per employee
-    from onemancompany.core.mcp_tools import servers_for
-    for name, spec in servers_for(employee_id).items():
-        servers.setdefault(name, spec)
+    # MCP connectors installed as company tools (Tools panel), granted per
+    # employee. Started through the launcher so their keys never appear in
+    # this file (which the employee can read) nor in the CLI environment.
+    from onemancompany.core.mcp_tools import granted_tool_ids
+    for tool_id in granted_tool_ids(employee_id):
+        servers.setdefault(tool_id, {
+            "command": launcher[0],
+            "args": [*launcher[1:], "connector", tool_id],
+            "env": {ENV_OMC_DATA_ROOT: data_root},
+        })
 
     # Extra MCP servers the CEO granted in config.yaml (`mcp_servers`)
     servers.update(company_mcp_servers_for(employee_id, reserved=set(servers)))

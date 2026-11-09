@@ -345,7 +345,11 @@ class ClaudeDaemon:
         # Exclude ANTHROPIC_API_KEY so Claude CLI uses its own OAuth auth
         # instead of picking up the company-level token (which is for
         # company-hosted LangChain employees, not self-hosted CLI).
-        _exclude_env = {"CLAUDECODE", "ANTHROPIC_API_KEY"}
+        # Also strip every stored secret (provider keys, connector and API
+        # tokens): employees reach services only through MCP connectors and
+        # the API relay, never with raw keys in their shell environment.
+        from onemancompany.core.secret_store import secret_env_names
+        _exclude_env = {"CLAUDECODE", "ANTHROPIC_API_KEY"} | secret_env_names()
         env = {k: v for k, v in os.environ.items() if k not in _exclude_env}
 
         mode = "NEW" if self.is_new else "RESUME"
