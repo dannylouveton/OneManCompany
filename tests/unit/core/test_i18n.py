@@ -141,6 +141,8 @@ class TestLanguageRoutes:
         monkeypatch.setattr("onemancompany.agents.onboarding._load_nickname_pool", lambda lang="zh": ["Le Hibou", "Le Renard"])
         save = AsyncMock()
         monkeypatch.setattr(routes._store, "save_employee", save)
+        monkeypatch.setattr(routes, "_localize_default_principles", lambda emp_id, lang: False)
+        monkeypatch.setattr(routes, "_rename_in_work_principles", lambda emp_id, nickname: None)
 
         result = await routes.update_language_settings({"language": "fr", "rename_nicknames": True})
 
@@ -166,3 +168,37 @@ class TestWorkPrinciplesHeading:
         text = wp.read_text(encoding="utf-8")
         assert text.startswith("# Pat EA (La Tramontane) Work Principles")
         assert "- Be precise (always)" in text
+
+
+class TestLocalizedPrinciples:
+    def _setup(self, monkeypatch, tmp_path, content):
+        from onemancompany.api import routes
+
+        data = tmp_path / "data"
+        (data / "00003").mkdir(parents=True)
+        (data / "00003" / "work_principles.md").write_text(content, encoding="utf-8")
+        monkeypatch.setattr(config_mod, "EMPLOYEES_DIR", data)
+        return routes, data / "00003" / "work_principles.md"
+
+    def test_default_english_becomes_french(self, monkeypatch, tmp_path):
+        from onemancompany.agents.onboarding import _NICKNAMES_FILE
+
+        shipped = (_NICKNAMES_FILE.parent / "employees" / "00003" / "work_principles.md").read_text(encoding="utf-8")
+        routes, path = self._setup(monkeypatch, tmp_path, shipped.replace("(铁面侠)", "(Le Forgeron)"))
+        assert routes._localize_default_principles("00003", "fr") is True
+        text = path.read_text(encoding="utf-8")
+        assert text.startswith("# Principes de travail — Alex COO (Le Forgeron)")
+        assert "Principes fondamentaux" in text
+        # and back to English
+        assert routes._localize_default_principles("00003", "en") is True
+        assert path.read_text(encoding="utf-8").startswith("# Alex COO (Le Forgeron) Work Principles")
+
+    def test_edited_principles_are_kept(self, monkeypatch, tmp_path):
+        routes, path = self._setup(monkeypatch, tmp_path, "# Alex COO (X) Work Principles\n\n- my own rule\n")
+        assert routes._localize_default_principles("00003", "fr") is False
+        assert "my own rule" in path.read_text(encoding="utf-8")
+
+    def test_french_heading_nickname_rename(self, monkeypatch, tmp_path):
+        routes, path = self._setup(monkeypatch, tmp_path, "# Principes de travail — Alex COO (Le Forgeron)\n\n- a (b)\n")
+        routes._rename_in_work_principles("00003", "Le Lynx")
+        assert path.read_text(encoding="utf-8") == "# Principes de travail — Alex COO (Le Lynx)\n\n- a (b)\n"

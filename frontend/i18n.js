@@ -17,6 +17,36 @@
 
   const DICTS = {
     fr: {
+      "Founding": "Fondateur",
+      "Junior": "Junior",
+      "Mid": "Confirmé",
+      "Senior": "Senior",
+      "Operations": "Opérations",
+      "Engineering": "Ingénierie",
+      "Design": "Design",
+      "Analytics": "Analyse",
+      "Marketing": "Marketing",
+      "General": "Général",
+      "HR": "RH",
+      "Sales": "Ventes",
+      "Executive": "Direction",
+      "CEO Office": "Bureau du CEO",
+      "Department": "Service",
+      "Role": "Rôle",
+      "Level": "Niveau",
+      "Core Principles": "Principes fondamentaux",
+      "Labels": "Libellés",
+      "Resolution": "Résolution",
+      "Created by": "Créé par",
+      "Fee": "Frais",
+      "Actual": "Réel",
+      "Connected": "Connecté",
+      "Not connected": "Non connecté",
+      "nodes": "nœuds",
+      "messages": "messages",
+      "participants": "participants",
+      "tasks": "tâches",
+      "notes": "notes",
       "0 selected": "0 sélectionné",
       "0 selected — click cards to select": "0 sélectionné — cliquez sur les cartes pour sélectionner",
       "1-on-1": "Entretien individuel",
@@ -479,17 +509,111 @@
   document.documentElement.lang = lang;
   const dict = DICTS[lang] || null;
 
+  // Strings built with variables in app.js: [regex on the English text, French replacement]
+  const PATTERNS = {
+    fr: [
+      [/^(.*\S) Details$/, '$1 — Fiche'],
+      [/^(.*?) \(([^()]*)\) Work Principles$/, 'Principes de travail — $1 ($2)'],
+      [/^(\d+) nodes$/, '$1 nœuds'],
+      [/^(\d+) tasks$/, '$1 tâches'],
+      [/^(\d+) people$/, '$1 personnes'],
+      [/^(\d+) session\(s\)$/, '$1 session(s)'],
+      [/^\[(\d+) notes\]$/, '[$1 notes]'],
+      [/^\((\d+) notes\)$/, '($1 notes)'],
+      [/^(\d+) messages · (\d+) participants · (.*)$/, '$1 messages · $2 participants · $3'],
+      [/^(\d+) issues? resolved$/, '$1 ticket(s) résolu(s)'],
+      [/^(.*) \((\d+) issues\)$/, '$1 ($2 tickets)'],
+      [/^v(\S+) \((\d+) issues\)$/, 'v$1 ($2 tickets)'],
+      [/^(\d+)\/(\d+) SLOTS$/, '$1/$2 EMPLACEMENTS'],
+      [/^\(suggested: (.*) pts\)$/, '(suggéré : $1 pts)'],
+      [/^\.\.\. \((\d+) more lines\)$/, '... ($1 lignes de plus)'],
+      [/^Acceptance Criteria \((\d+)\)$/, "Critères d'acceptation ($1)"],
+      [/^Acceptance Result: (.*)$/, "Résultat de l'acceptation : $1"],
+      [/^EA Review: (.*)$/, "Revue de l'EA : $1"],
+      [/^Auto-confirm in (\d+)s$/, 'Confirmation automatique dans $1 s'],
+      [/^Current quarter: (.*) tasks$/, 'Trimestre en cours : $1 tâches'],
+      [/^Log \((\d+)\)$/, 'Journal ($1)'],
+      [/^Team \((\d+)\)$/, 'Équipe ($1)'],
+      [/^Timeline \((\d+) entries\):?$/, 'Chronologie ($1 entrées) :'],
+      [/^Meeting Minutes: (.*)$/, 'Compte rendu : $1'],
+      [/^Login with (.*)$/, 'Se connecter avec $1'],
+      [/^RECRUIT PARTY \((\d+)\)$/, 'ÉQUIPE À RECRUTER ($1)'],
+      [/^Released v(.*)$/, 'Version v$1 publiée'],
+      [/^Sync (.*)$/, 'Synchro $1'],
+      [/^Tokens: (.*) in \/ (.*) out$/, 'Tokens : $1 entrants / $2 sortants'],
+      [/^Sessions \((\d+)\): (.*)$/, 'Sessions ($1) : $2'],
+      [/^Select issues to include in release \((\d+) done\):?$/, 'Tickets à inclure dans la version ($1 terminés) :'],
+      [/^(.*) Meeting$/, 'Réunion $1'],
+      [/^Interview: (.*)$/, 'Entretien : $1'],
+      [/^■ Stopped \((\d+)\)$/, '■ Arrêtées ($1)'],
+      [/^(\d+) backend file\(s\) changed: (.*)$/, '$1 fichier(s) serveur modifié(s) : $2'],
+      [/^Imported "(.*)" — (\d+) issues, (\d+) KRs$/, 'Import de « $1 » — $2 tickets, $3 KR'],
+      [/^Delete (KR|issue|sprint|template|product|project) "(.*)"(?: and ALL its data)?\?(.*)$/, (m, kind, name, rest) =>
+        `Supprimer ${({KR: 'le KR', issue: 'le ticket', sprint: 'le sprint', template: 'le modèle', product: 'le produit', project: 'le projet'})[kind]} « ${name} » ?` +
+        (rest.includes('cannot be undone') ? ' Toutes ses données seront supprimées, action irréversible.' : '')],
+      [/^Stop scheduled job "(.*)"\? Its pending tasks will also be cancelled\.$/, 'Arrêter la tâche planifiée « $1 » ? Ses tâches en attente seront aussi annulées.'],
+      [/^Confirm rehire (.*)\? Will restart from Lv\.1\.$/, 'Réembaucher $1 ? Il repartira du niveau 1.'],
+      [/^Are you sure you want to dismiss (.*)\?\nReason: ([\s\S]*)\n\nThis cannot be undone\.$/, 'Voulez-vous vraiment licencier $1 ?\nMotif : $2\n\nAction irréversible.'],
+      [/^(Add link|Close|Create|Delete|Release|Remove link|Start|Update) failed: (.*)$/, (m, what, err) =>
+        `${({'Add link': "Échec de l'ajout du lien", Close: 'Échec de la clôture', Create: 'Échec de la création', Delete: 'Échec de la suppression', Release: 'Échec de la publication', 'Remove link': 'Échec du retrait du lien', Start: 'Échec du démarrage', Update: 'Échec de la mise à jour'})[what]} : ${err}`],
+      [/^Failed to (load activity|load kanban|load roadmap|send message|clear history): (.*)$/, (m, what, err) =>
+        `${({'load activity': "Impossible de charger l'activité", 'load kanban': 'Impossible de charger le kanban', 'load roadmap': 'Impossible de charger la feuille de route', 'send message': "Impossible d'envoyer le message", 'clear history': "Impossible d'effacer l'historique"})[what]} : ${err}`],
+      [/^(Failed|Error|Load failed|Cannot dismiss): (.*)$/, (m, what, err) =>
+        `${({Failed: 'Échec', Error: 'Erreur', 'Load failed': 'Échec du chargement', 'Cannot dismiss': 'Licenciement impossible'})[what]} : ${err}`],
+    ],
+  };
+  const patterns = PATTERNS[lang] || [];
+
   // Split "⚙ Settings:" into prefix "⚙ ", core "Settings", suffix ":"
   const PARTS_RE = /^([^A-Za-z0-9]*)([\s\S]*?)([\s:：….!?]*)$/;
 
+  const has = (key) => Object.prototype.hasOwnProperty.call(dict, key);
+
+  function lookupWord(text) {
+    if (has(text)) return dict[text];
+    const m = PARTS_RE.exec(text);
+    if (!m || !m[2] || !has(m[2])) return null;
+    return m[1] + dict[m[2]] + m[3];
+  }
+
+  function lookupPattern(text) {
+    // Keep a leading icon/emoji out of the match ("🎓 1-on-1 Meeting")
+    const lead = (text.match(/^[^A-Za-z0-9[(.■]*/) || [''])[0];
+    const body = text.slice(lead.length);
+    for (const [re, repl] of patterns) {
+      if (re.test(body)) {
+        // Translate known words captured by the pattern (e.g. a meeting type)
+        const out = typeof repl === 'function'
+          ? body.replace(re, repl)
+          : body.replace(re, (...args) => repl.replace(/\$(\d)/g, (_, i) => {
+              const v = args[Number(i)] ?? '';
+              return lookupWord(v) ?? v;
+            }));
+        return lead + out;
+      }
+    }
+    return null;
+  }
+
+  // "Status: active | Owner: COO" → translate each "Label: value" segment
+  function lookupLabels(text) {
+    if (!/:\s/.test(text)) return null;
+    let changed = false;
+    const out = text.split(' | ').map((seg) => {
+      const m = /^(\s*[^:]{1,40}?)(\s*:\s*)([\s\S]*)$/.exec(seg);
+      if (!m) return seg;
+      const label = lookupWord(m[1].trim());
+      const value = lookupWord(m[3].trim());
+      if (label === null && value === null) return seg;
+      changed = true;
+      return (label ?? m[1].trim()) + ' : ' + (value ?? m[3]);
+    }).join(' | ');
+    return changed ? out : null;
+  }
+
   function lookup(text) {
     if (!dict || !text) return null;
-    if (Object.prototype.hasOwnProperty.call(dict, text)) return dict[text];
-    const m = PARTS_RE.exec(text);
-    if (!m || !m[2]) return null;
-    const core = m[2];
-    if (!Object.prototype.hasOwnProperty.call(dict, core)) return null;
-    return m[1] + dict[core] + m[3];
+    return lookupWord(text) ?? lookupPattern(text) ?? lookupLabels(text);
   }
 
   /** Translate an English UI string; returns the input when no translation exists. */

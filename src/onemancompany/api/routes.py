@@ -2129,6 +2129,7 @@ async def get_talent_pool() -> dict:
 
 
 _CEO_NICKNAMES = {"zh": "老板", "fr": "Le Patron", "en": "The Boss"}
+SUPPORTED_LANGUAGE_CODES = ("en", "fr", "zh")
 
 
 def _nickname_matches_language(nickname: str, lang: str, pool: set[str]) -> bool:
@@ -2140,21 +2141,63 @@ def _nickname_matches_language(nickname: str, lang: str, pool: set[str]) -> bool
     return nickname in pool
 
 
+_WP_HEADING_NICK_RE = re.compile(r"^(# [^\n]*?)\(([^()\n]*)\)", re.M)
+
+
 def _rename_in_work_principles(emp_id: str, nickname: str) -> None:
-    """Update the nickname in the "# Name (nickname) Work Principles" heading."""
+    """Update the nickname shown in parentheses in the work-principles heading."""
     from onemancompany.core.config import EMPLOYEES_DIR
 
     path = EMPLOYEES_DIR / emp_id / "work_principles.md"
     if not path.exists():
         return
     text = path.read_text(encoding="utf-8")
-    new_text = re.sub(
-        r"^(# .+?) \([^()\n]*\)( Work Principles)",
-        lambda m: f"{m.group(1)} ({nickname}){m.group(2)}",
-        text, count=1, flags=re.M,
-    )
+    new_text = _WP_HEADING_NICK_RE.sub(lambda m: f"{m.group(1)}({nickname})", text, count=1)
     if new_text != text:
         write_text_utf(path, new_text)
+
+
+def _principles_template(emp_id: str, lang: str):
+    """Shipped default work principles of *emp_id* for *lang* (English = work_principles.md)."""
+    from onemancompany.agents.onboarding import _NICKNAMES_FILE
+
+    base = _NICKNAMES_FILE.parent / "employees" / emp_id
+    path = base / ("work_principles.md" if lang == "en" else f"work_principles.{lang}.md")
+    return path if path.exists() else None
+
+
+def _localize_default_principles(emp_id: str, lang: str) -> bool:
+    """Swap an untouched default work_principles.md for the *lang* version.
+
+    Principles the employee or the CEO edited are left alone: the file is
+    replaced only when it matches a shipped default (ignoring the nickname).
+    """
+    from onemancompany.core.config import EMPLOYEES_DIR
+
+    target = _principles_template(emp_id, lang)
+    path = EMPLOYEES_DIR / emp_id / "work_principles.md"
+    if target is None or not path.exists():
+        return False
+
+    def normalize(text: str) -> str:
+        return _WP_HEADING_NICK_RE.sub(lambda m: f"{m.group(1)}()", text.strip(), count=1)
+
+    current = path.read_text(encoding="utf-8")
+    defaults = {
+        normalize(tpl.read_text(encoding="utf-8"))
+        for code in SUPPORTED_LANGUAGE_CODES
+        if (tpl := _principles_template(emp_id, code)) is not None
+    }
+    if normalize(current) not in defaults:
+        return False
+    nick_match = _WP_HEADING_NICK_RE.search(current)
+    new_text = target.read_text(encoding="utf-8")
+    if nick_match:
+        new_text = _WP_HEADING_NICK_RE.sub(lambda m: f"{m.group(1)}({nick_match.group(2)})", new_text, count=1)
+    if new_text.strip() == current.strip():
+        return False
+    write_text_utf(path, new_text)
+    return True
 
 
 @router.get("/api/settings/language")
@@ -2186,6 +2229,9 @@ async def update_language_settings(body: dict) -> dict:
     config["language"] = lang
     write_text_utf(APP_CONFIG_PATH, yaml.dump(config, default_flow_style=False, allow_unicode=True))
     reload_app_config()
+
+    for emp_id in _load_all():
+        _localize_default_principles(emp_id, lang)
 
     renamed: dict[str, str] = {}
     if body.get("rename_nicknames"):
