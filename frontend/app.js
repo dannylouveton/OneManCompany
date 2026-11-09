@@ -294,7 +294,7 @@ class AppController {
           // Product planning conversations are with the EA — label them
           // the same as ea_chat. 1-on-1s show the employee's nickname.
           const source = (this._currentConvType === 'ea_chat' || this._currentConvType === 'product')
-            ? '玲珑阁 (EA)'
+            ? this._eaLabel()
             : this._resolveEmployeeNickname(p.employee_id || this._currentConvEmployeeId || '');
           this._ceoTerm.appendMessage({
             role: 'system',
@@ -2591,7 +2591,7 @@ class AppController {
         messages = (data.messages || []).map(m => ({
           role: m.sender === 'ceo' ? 'ceo' : 'system',
           text: m.text || '',
-          source: m.sender === 'ceo' ? undefined : '玲珑阁 (EA)',
+          source: m.sender === 'ceo' ? undefined : this._eaLabel(),
         }));
       } catch (e) { console.error('EA chat history load error:', e); }
     }
@@ -7148,6 +7148,13 @@ class AppController {
       if (emp) return emp.name || emp.nickname || employeeId;
     }
     return employeeId;
+  }
+
+  _eaLabel() {
+    // EA label in chat: current nickname (follows the company language)
+    const resolved = this._resolveEmployeeNickname('00004');
+    const nick = resolved.replace(/ \(00004\)$/, '');
+    return nick && nick !== '00004' ? `${nick} (EA)` : 'EA';
   }
 
   _resolveEmployeeNickname(employeeId) {

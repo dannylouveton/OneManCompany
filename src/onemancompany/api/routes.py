@@ -2140,6 +2140,23 @@ def _nickname_matches_language(nickname: str, lang: str, pool: set[str]) -> bool
     return nickname in pool
 
 
+def _rename_in_work_principles(emp_id: str, nickname: str) -> None:
+    """Update the nickname in the "# Name (nickname) Work Principles" heading."""
+    from onemancompany.core.config import EMPLOYEES_DIR
+
+    path = EMPLOYEES_DIR / emp_id / "work_principles.md"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    new_text = re.sub(
+        r"^(# .+?) \([^()\n]*\)( Work Principles)",
+        lambda m: f"{m.group(1)} ({nickname}){m.group(2)}",
+        text, count=1, flags=re.M,
+    )
+    if new_text != text:
+        write_text_utf(path, new_text)
+
+
 @router.get("/api/settings/language")
 async def get_language_settings() -> dict:
     """Return the company language (UI + AI employees) and supported languages."""
@@ -2188,6 +2205,7 @@ async def update_language_settings(body: dict) -> dict:
             if nickname:
                 existing.add(nickname)
                 await _store.save_employee(emp_id, {"nickname": nickname})
+                _rename_in_work_principles(emp_id, nickname)
                 renamed[emp_id] = nickname
 
     logger.info("Company language set to {} ({} nicknames renamed)", lang, len(renamed))

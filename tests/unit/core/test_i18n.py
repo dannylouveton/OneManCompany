@@ -149,3 +149,20 @@ class TestLanguageRoutes:
         assert result["renamed"] == {"00001": "Le Patron", "00002": "Le Renard", "00007": "Le Renard"}
         assert save.await_count == 3
 
+
+
+class TestWorkPrinciplesHeading:
+    def test_heading_nickname_is_replaced(self, monkeypatch, tmp_path):
+        from onemancompany.api import routes
+
+        emp_dir = tmp_path / "00004"
+        emp_dir.mkdir()
+        wp = emp_dir / "work_principles.md"
+        wp.write_text("# Pat EA (玲珑阁) Work Principles\n\n- Be precise (always)\n", encoding="utf-8")
+        monkeypatch.setattr(config_mod, "EMPLOYEES_DIR", tmp_path)
+
+        routes._rename_in_work_principles("00004", "La Tramontane")
+
+        text = wp.read_text(encoding="utf-8")
+        assert text.startswith("# Pat EA (La Tramontane) Work Principles")
+        assert "- Be precise (always)" in text
