@@ -1,0 +1,29 @@
+# Generated paths and secrets come from `python -m onemancompany.runner setup-docker`
+# (writes .env, secrets.env and compose.override.yaml next to this file).
+services:
+  runner:
+    build:
+      context: ../..
+      dockerfile: deploy/runner/Dockerfile
+    image: onemancompany-runner
+    restart: unless-stopped
+    env_file:
+      - .env            # OMC_DATA_ROOT, OMC_CONTROL_URL, OMC_CONFIG_HOME
+      - claude.env      # CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) — you fill it
+    environment:
+      OMC_DATA_ROOT: ${OMC_DATA_ROOT}
+    ports:
+      - "127.0.0.1:${RUNNER_PORT:-8100}:8100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Company data at the same path as on the control plane, so paths in
+      # prompts and session files stay valid.
+      - ${OMC_DATA_ROOT}:${OMC_DATA_ROOT}
+      # The runner's own secret store replaces the company .env: it only
+      # holds the runner token and the tool-call signing key.
+      - ./secrets.env:${OMC_DATA_ROOT}/.env:ro
+      # Claude Code sessions (--resume) survive container restarts.
+      - claude-home:/home/omc/.claude
+volumes:
+  claude-home:

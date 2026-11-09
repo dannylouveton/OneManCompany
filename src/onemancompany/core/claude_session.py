@@ -22,7 +22,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
+from dataclasses import asdict, dataclass, field, fields
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -320,7 +322,18 @@ def agent_sandbox_settings() -> dict | None:
     if cfg.get("enabled", True) is False:
         return None
     home = Path.home()
-    expand = lambda items: [Path(str(p)).expanduser().resolve() for p in (items or [])]  # noqa: E731
+    # "~" in config.yaml means the CEO's home, also inside the runner container.
+    config_home = os.environ.get("OMC_CONFIG_HOME")
+
+    def expand(items) -> list[Path]:
+        out = []
+        for item in items or []:
+            text = str(item)
+            if config_home and (text == "~" or text.startswith("~/")):
+                text = config_home + text[1:]
+            out.append(Path(text).expanduser().resolve())
+        return out
+
     work_dirs = list(dict.fromkeys([Path(DATA_ROOT).resolve(), *expand(cfg.get("allow_dirs")), *expand(cfg.get("allow_write"))]))
     read_dirs = [d for d in expand(cfg.get("read_dirs")) if d not in work_dirs]
 
@@ -345,9 +358,16 @@ def agent_sandbox_settings() -> dict | None:
         deny.append(f"Edit({_rule(system_dir)}/**)")
     # Shell commands must not call OneManCompany's own API (approve their
     # own API calls, change access rights…): only the CEO's browser does.
+    from urllib.parse import urlparse
+
     port = str(os.environ.get("PORT") or 8000)
     local_api = [f"{h}:{port}" for h in ("localhost", "127.0.0.1", "[::1]", "0.0.0.0")]
-    deny += [f"WebFetch(domain:{h})" for h in ("localhost", "127.0.0.1")]
+    control = urlparse(control_plane_url())
+    if control.hostname:
+        local_api.append(f"{control.hostname}:{control.port or (443 if control.scheme == 'https' else 80)}")
+    local_api = list(dict.fromkeys(local_api))
+    deny += [f"WebFetch(domain:{h})" for h in dict.fromkeys(["localhost", "127.0.0.1", control.hostname or "localhost"])]
+    nested = os.environ.get("OMC_RUNNER_CONTAINER") == "1"
     return {
         "sandbox": {
             "enabled": True,
@@ -360,6 +380,13 @@ def agent_sandbox_settings() -> dict | None:
                 "allowRead": [str(d) for d in work_dirs + read_dirs],
             },
             "network": {"deniedDomains": local_api},
+            # Shell commands never see these, even if the CLI needs them.
+            "credentials": {"envVars": [
+                {"name": n, "mode": "deny"} for n in sorted(ALWAYS_EXCLUDED_ENV | {"CLAUDE_CODE_OAUTH_TOKEN"})
+            ]},
+            # Inside the runner container the container is the outer boundary:
+            # bubblewrap cannot mount a fresh /proc there.
+            **({"enableWeakerNestedSandbox": True} if nested else {}),
         },
         "permissions": {
             "deny": list(dict.fromkeys(deny)),
@@ -367,6 +394,110 @@ def agent_sandbox_settings() -> dict | None:
             "blockReadsOutsideWorkingDirectories": True,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Session command — built on the machine that runs the agent (here or runner)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SessionSpec:
+    """What the control plane asks for; the runner turns it into a command."""
+
+    employee_id: str
+    project_id: str
+    session_id: str
+    is_new: bool
+    max_turns: int = 50
+    model: str = ""
+    plugins: list[str] = field(default_factory=list)
+    task_id: str = ""
+    project_dir: str = ""
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SessionSpec":
+        known = {f.name for f in fields(cls)}
+        spec = cls(**{k: v for k, v in data.items() if k in known})
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", spec.employee_id or ""):
+            raise ValueError("invalid employee_id")
+        if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", spec.session_id or ""):
+            raise ValueError("invalid session_id")
+        return spec
+
+
+# Variables that must never reach an employee's CLI environment, even when
+# they are not in the secret store (runner tokens, signing key).
+ALWAYS_EXCLUDED_ENV = {"CLAUDECODE", "ANTHROPIC_API_KEY", "OMC_INTERNAL_KEY", "OMC_RUNNER_TOKEN"}
+
+
+def control_plane_url() -> str:
+    """URL the employee's tools use to reach OneManCompany (the control plane)."""
+    return os.environ.get("OMC_CONTROL_URL") or "http://localhost:8000"
+
+
+async def prepare_session(spec: SessionSpec) -> tuple[list[str], dict[str, str], str]:
+    """Return (command, environment, cwd) for an employee's Claude CLI session."""
+    if spec.plugins:
+        await _ensure_plugins(spec.plugins)
+    mcp_config_path = None
+    try:
+        from onemancompany.tools.mcp.config_builder import write_mcp_config
+        mcp_config_path = str(write_mcp_config(
+            spec.employee_id, task_id=spec.task_id, project_id=spec.project_id,
+            project_dir=spec.project_dir, server_url=control_plane_url(),
+        ))
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"Failed to generate MCP config: {e}")  # pragma: no cover
+
+    cmd = [
+        "claude", "--print", "--verbose",
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--dangerously-skip-permissions",
+        "--max-turns", str(spec.max_turns),
+    ]
+    if spec.model:
+        cmd += ["--model", spec.model]
+    if mcp_config_path:
+        cmd += ["--mcp-config", mcp_config_path]
+    # Only the MCP servers OneManCompany grants (--mcp-config): never the
+    # CEO's own Claude Code servers, which would otherwise be inherited
+    # and usable without confirmation (--dangerously-skip-permissions).
+    cmd += ["--strict-mcp-config"]
+    # Connector actions the CEO blocked (enforced even without permission prompts)
+    try:
+        from onemancompany.tools.mcp.config_builder import disallowed_mcp_tools_for
+        blocked = disallowed_mcp_tools_for(spec.employee_id)
+    except Exception as exc:  # never block a session on a config error
+        logger.warning("[claude-daemon] cannot compute blocked tools for {}: {}", spec.employee_id, exc)
+        blocked = []
+    if blocked:
+        cmd += ["--disallowedTools", ",".join(blocked)]
+    # Skip the CEO's user-level settings (personal skills, plugins, hooks).
+    # Talent plugins are installed at user scope, so employees that need
+    # them keep user settings.
+    if spec.plugins:
+        logger.info("[claude-daemon] {} uses plugins {} — keeping user-level Claude settings",
+                    spec.employee_id, spec.plugins)
+    else:
+        cmd += ["--setting-sources", "project,local"]
+    sandbox = agent_sandbox_settings()
+    if sandbox:
+        cmd += ["--settings", json.dumps(sandbox)]
+    cmd += ["--session-id", spec.session_id] if spec.is_new else ["--resume", spec.session_id]
+
+    # Claude CLI uses its own auth (OAuth login or CLAUDE_CODE_OAUTH_TOKEN),
+    # never the company-level key. Every stored secret is stripped too:
+    # employees reach services only through MCP connectors and the API relay.
+    from onemancompany.core.secret_store import secret_env_names
+    exclude = ALWAYS_EXCLUDED_ENV | secret_env_names()
+    env = {k: v for k, v in os.environ.items() if k not in exclude}
+    cwd = str(EMPLOYEES_DIR / spec.employee_id)  # CLAUDE.md lives there
+    return cmd, env, cwd
+
 
 class ClaudeDaemon:
     """A persistent Claude CLI process that accepts prompts via stream-json stdin."""
@@ -382,8 +513,11 @@ class ClaudeDaemon:
         max_turns: int = 50,
         claude_plugins: list[str] | None = None,
         model: str = "",
+        task_id: str = "",
     ) -> None:
         self.employee_id = employee_id
+        self.task_id = task_id
+        self.project_dir = work_dir
         self.project_id = project_id
         self.session_id = session_id
         self.is_new = is_new
@@ -416,78 +550,25 @@ class ClaudeDaemon:
         except Exception as e:  # pragma: no cover
             logger.warning(f"[claude-daemon:stderr] drain failed for {self.employee_id}: {e}")  # pragma: no cover
 
-    async def start(self) -> None:
-        """Spawn the persistent claude process."""
-        if self.claude_plugins:
-            await _ensure_plugins(self.claude_plugins)
-        cmd = [
-            "claude", "--print", "--verbose",
-            "--input-format", "stream-json",
-            "--output-format", "stream-json",
-            "--dangerously-skip-permissions",
-            "--max-turns", str(self.max_turns),
-        ]
-        if self.model:
-            cmd += ["--model", self.model]
-        if self.mcp_config_path:
-            cmd += ["--mcp-config", self.mcp_config_path]
-        # Only the MCP servers OneManCompany grants (--mcp-config): never the
-        # CEO's own Claude Code servers, which would otherwise be inherited
-        # and usable without confirmation (--dangerously-skip-permissions).
-        cmd += ["--strict-mcp-config"]
-        # Connector actions the CEO blocked (enforced even without permission prompts)
-        try:
-            from onemancompany.tools.mcp.config_builder import disallowed_mcp_tools_for
-            blocked = disallowed_mcp_tools_for(self.employee_id)
-        except Exception as exc:  # never block a session on a config error
-            logger.warning("[claude-daemon] cannot compute blocked tools for {}: {}", self.employee_id, exc)
-            blocked = []
-        if blocked:
-            cmd += ["--disallowedTools", ",".join(blocked)]
-        # Skip the CEO's user-level settings (personal skills, plugins, hooks).
-        # Talent plugins are installed at user scope, so employees that need
-        # them keep user settings.
-        if self.claude_plugins:
-            logger.info(
-                "[claude-daemon] {} uses plugins {} — keeping user-level Claude settings",
-                self.employee_id, self.claude_plugins,
-            )
-        else:
-            cmd += ["--setting-sources", "project,local"]
-        sandbox = agent_sandbox_settings()
-        if sandbox:
-            cmd += ["--settings", json.dumps(sandbox)]
-        if self.is_new:
-            cmd += ["--session-id", self.session_id]
-        else:
-            cmd += ["--resume", self.session_id]
+    def spec(self) -> "SessionSpec":
+        return SessionSpec(
+            employee_id=self.employee_id, project_id=self.project_id, session_id=self.session_id,
+            is_new=self.is_new, max_turns=self.max_turns, model=self.model,
+            plugins=list(self.claude_plugins), task_id=self.task_id, project_dir=self.project_dir,
+        )
 
-        # Exclude ANTHROPIC_API_KEY so Claude CLI uses its own OAuth auth
-        # instead of picking up the company-level token (which is for
-        # company-hosted LangChain employees, not self-hosted CLI).
-        # Also strip every stored secret (provider keys, connector and API
-        # tokens): employees reach services only through MCP connectors and
-        # the API relay, never with raw keys in their shell environment.
-        from onemancompany.core.secret_store import secret_env_names
-        _exclude_env = {"CLAUDECODE", "ANTHROPIC_API_KEY"} | secret_env_names()
-        env = {k: v for k, v in os.environ.items() if k not in _exclude_env}
+    async def start(self) -> None:
+        """Spawn the persistent claude process — here, or on the remote runner."""
+        from onemancompany.core.session_process import spawn_session
 
         mode = "NEW" if self.is_new else "RESUME"
         logger.info(
             f"[claude-daemon] [{mode}] employee={self.employee_id} "
-            f"project={self.project_id} session={self.session_id[:8]}… "
-            f"cwd={self.work_dir}"
+            f"project={self.project_id} session={self.session_id[:8]}…"
         )
-
-        self.proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.work_dir,
-            env=env,
-        )
-        _save_running_pid(self.employee_id, self.project_id, self.proc.pid)
+        self.proc = await spawn_session(self.spec())
+        if not getattr(self.proc, "remote", False):
+            _save_running_pid(self.employee_id, self.project_id, self.proc.pid)
         self._started = True
         # Drain stderr in background to prevent pipe buffer deadlock
         self._stderr_task = asyncio.create_task(self._drain_stderr())
@@ -882,19 +963,6 @@ async def _get_or_start_daemon(
     if daemon:
         await daemon.stop()
 
-    # Generate MCP config
-    mcp_config_path = None
-    try:
-        from onemancompany.tools.mcp.config_builder import write_mcp_config
-        mcp_config_path = str(write_mcp_config(
-            employee_id,
-            task_id=task_id,
-            project_id=project_id,
-            project_dir=work_dir,
-        ))
-    except Exception as e:  # pragma: no cover
-        logger.warning(f"Failed to generate MCP config: {e}")  # pragma: no cover
-
     # Load claude_plugins and model from employee profile
     from onemancompany.core.config import load_employee_profile_yaml, employee_configs
     _profile = load_employee_profile_yaml(employee_id)
@@ -910,11 +978,11 @@ async def _get_or_start_daemon(
         project_id=project_id,
         session_id=session_id,
         is_new=is_new,
-        mcp_config_path=mcp_config_path,
         work_dir=work_dir,
         max_turns=max_turns,
         claude_plugins=claude_plugins,
         model=llm_model,
+        task_id=task_id,
     )
     await daemon.start()
 
@@ -941,11 +1009,11 @@ async def _get_or_start_daemon(
             project_id=project_id,
             session_id=new_session_id,
             is_new=True,
-            mcp_config_path=mcp_config_path,
             work_dir=work_dir,
             max_turns=max_turns,
             claude_plugins=claude_plugins,
             model=llm_model,
+            task_id=task_id,
         )
         await daemon.start()
 

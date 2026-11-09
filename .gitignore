@@ -271,3 +271,9 @@ docs/.DS_Store
 
 # Local dev scripts
 scripts/batch_submit_tasks.py
+
+# Runner deployment (generated, contains secrets)
+deploy/runner/.env
+deploy/runner/secrets.env
+deploy/runner/claude.env
+deploy/runner/compose.override.yaml

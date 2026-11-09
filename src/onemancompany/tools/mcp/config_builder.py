@@ -81,7 +81,7 @@ def build_mcp_config(
         servers.setdefault(tool_id, {
             "command": launcher[0],
             "args": [*launcher[1:], "connector", tool_id],
-            "env": {ENV_OMC_DATA_ROOT: data_root},
+            "env": {ENV_OMC_DATA_ROOT: data_root, ENV_OMC_EMPLOYEE_ID: employee_id, ENV_OMC_SERVER_URL: server_url},
         })
 
     # Extra MCP servers the CEO granted in config.yaml (`mcp_servers`)

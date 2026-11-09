@@ -6372,6 +6372,26 @@ class _RoutesSnapshot:
 # =====================================================================
 
 
+@router.post("/api/internal/connector-spec")
+async def internal_connector_spec(body: dict, request: Request) -> dict:
+    """Resolved spec (with keys) of a connector granted to the signed employee.
+
+    Used by a remote runner's launcher: connector keys stay on the control
+    plane and only reach the connector process of an employee who has access.
+    """
+    from onemancompany.core.mcp_tools import granted_tool_ids, load_tool, resolve_placeholders
+    from onemancompany.core.secret_store import CALLER_HEADER, verify_caller
+
+    employee_id = str(body.get("employee_id", ""))
+    tool_id = str(body.get("tool_id", ""))
+    if not verify_caller(employee_id, request.headers.get(CALLER_HEADER)):
+        raise HTTPException(403, "Unsigned or invalid caller")
+    if tool_id not in granted_tool_ids(employee_id):
+        raise HTTPException(403, "Connector not granted to this employee")
+    data = load_tool(tool_id) or {}
+    return {"mcp": resolve_placeholders(dict(data.get("mcp") or {}))}
+
+
 @router.post("/api/internal/tool-call")
 async def internal_tool_call(body: dict, request: Request) -> dict:
     """Generic tool-call endpoint for MCP server (Claude CLI).

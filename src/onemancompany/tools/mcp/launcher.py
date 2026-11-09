@@ -78,6 +78,22 @@ async def _bridge(spec: dict) -> None:
                 await server.run(read, write, server.create_initialization_options())
 
 
+def _fetch_connector_spec(tool_id: str) -> dict:
+    import httpx
+
+    from onemancompany.core.config import ENV_OMC_EMPLOYEE_ID, ENV_OMC_SERVER_URL
+    from onemancompany.core.secret_store import CALLER_HEADER, caller_signature
+
+    employee_id = os.environ.get(ENV_OMC_EMPLOYEE_ID, "")
+    url = os.environ.get(ENV_OMC_SERVER_URL, "http://localhost:8000").rstrip("/")
+    resp = httpx.post(f"{url}/api/internal/connector-spec", timeout=30,
+                      headers={CALLER_HEADER: caller_signature(employee_id)},
+                      json={"employee_id": employee_id, "tool_id": tool_id})
+    if resp.status_code != 200:
+        sys.exit(f"launcher: connector {tool_id} refused ({resp.status_code})")
+    return resp.json()["mcp"]
+
+
 def main(argv: list[str]) -> None:
     if len(argv) >= 2 and argv[0] == "internal" and "--" in argv:
         command = argv[argv.index("--") + 1:]
@@ -87,13 +103,18 @@ def main(argv: list[str]) -> None:
         return
 
     if len(argv) == 2 and argv[0] == "connector":
-        from onemancompany.core.mcp_tools import load_tool, resolve_placeholders
+        if os.environ.get("OMC_REMOTE_CONNECTORS") == "1":
+            # On a runner: the connector's keys stay on the control plane,
+            # which hands the resolved spec to this employee's signed request.
+            spec = _fetch_connector_spec(argv[1])
+        else:
+            from onemancompany.core.mcp_tools import load_tool, resolve_placeholders
 
-        data = load_tool(argv[1]) or {}
-        spec = data.get("mcp")
-        if data.get("type") != "mcp" or not isinstance(spec, dict):
-            sys.exit(f"launcher: unknown connector {argv[1]}")
-        spec = resolve_placeholders(dict(spec))
+            data = load_tool(argv[1]) or {}
+            spec = data.get("mcp")
+            if data.get("type") != "mcp" or not isinstance(spec, dict):
+                sys.exit(f"launcher: unknown connector {argv[1]}")
+            spec = resolve_placeholders(dict(spec))
         if spec.get("url"):
             asyncio.run(_bridge(spec))
         else:

@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import stat
 
+import pytest
+
 from onemancompany.core.secret_store import DotEnvSecretStore, masked
 
 
@@ -27,11 +29,20 @@ def test_masked():
     assert masked("") == ""
 
 
-def test_session_env_strips_secrets(monkeypatch):
-    import inspect
-    from onemancompany.core import claude_session
+@pytest.mark.asyncio
+async def test_session_env_strips_secrets(monkeypatch, tmp_path):
+    from onemancompany.core import claude_session, secret_store
+    from onemancompany.tools.mcp import config_builder
 
-    assert "secret_env_names()" in inspect.getsource(claude_session.ClaudeDaemon.start)
+    monkeypatch.setattr(secret_store, "secret_env_names", lambda: {"MY_SECRET"})
+    monkeypatch.setattr(config_builder, "write_mcp_config", lambda *a, **k: tmp_path / "mcp.json")
+    monkeypatch.setattr(claude_session, "agent_sandbox_settings", lambda: None)
+    for name in ("MY_SECRET", "OMC_INTERNAL_KEY", "OMC_RUNNER_TOKEN", "ANTHROPIC_API_KEY"):
+        monkeypatch.setenv(name, "x")
+    spec = claude_session.SessionSpec("00006", "p1", "12345678-aaaa", True)
+    cmd, env, cwd = await claude_session.prepare_session(spec)
+    assert not {"MY_SECRET", "OMC_INTERNAL_KEY", "OMC_RUNNER_TOKEN", "ANTHROPIC_API_KEY"} & set(env)
+    assert cmd[0] == "claude" and "--session-id" in cmd and cwd.endswith("00006")
 
 
 def test_caller_signature(tmp_path, monkeypatch):
