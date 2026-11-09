@@ -336,7 +336,7 @@ class AppController {
     // Log the event
     const formatters = {
       'state_snapshot':     () => {
-        const now = new Date().toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const now = new Date().toLocaleTimeString(window.I18N ? I18N.locale() : undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const el = document.getElementById('last-sync-time');
         if (el) el.textContent = `Sync ${now}`;
         return null;
@@ -402,7 +402,7 @@ class AppController {
             speaker: p.speaker,
             role: p.role,
             message: p.message,
-            time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+            time: new Date().toLocaleTimeString(window.I18N ? I18N.locale() : undefined, { hour12: false }),
           };
           this._appendChatMessage(chatEntry);
         }
@@ -814,7 +814,7 @@ class AppController {
   logEntry(agent, message, cssClass = 'system') {
     this._ensureActivityXterm();
     if (!this._activityXterm) return;
-    const time = new Date().toLocaleTimeString('zh-CN', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const time = new Date().toLocaleTimeString(window.I18N ? I18N.locale() : undefined, { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
     const color = this._activityLogAnsi[cssClass] || this._activityLogAnsi[agent.toLowerCase()] || ANSI.gray;
     this._activityXterm.writeln(`${ANSI.gray}${time}${ANSI.reset} ${color}${agent}${ANSI.reset} ${message}`);
     this._activityXterm.scrollToBottom();
@@ -6321,7 +6321,7 @@ class AppController {
           return;
         }
         list.innerHTML = items.map((item, idx) => {
-          const date = item.created_at ? new Date(item.created_at).toLocaleDateString('zh-CN') : '';
+          const date = item.created_at ? new Date(item.created_at).toLocaleDateString(window.I18N ? I18N.locale() : undefined) : '';
           return `
             <div class="company-culture-card">
               <div class="company-culture-card-num">${idx + 1}</div>
