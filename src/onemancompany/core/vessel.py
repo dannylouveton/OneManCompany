@@ -2466,6 +2466,12 @@ class EmployeeManager:
         """
         parts: list[str] = []
 
+        # Working language (company setting) — applies to every executor
+        from onemancompany.core.i18n import language_directive
+        lang_section = language_directive()
+        if lang_section:
+            parts.append(lang_section)
+
         # 0. Role identity — only for non-LangChain executors
         #    LangChain employees already have identity in system prompt.
         executor = self.executors.get(employee_id)

@@ -95,31 +95,53 @@ def _get_existing_nicknames() -> set[str]:
 _NICKNAMES_FILE = Path(__file__).resolve().parents[3] / "company" / "human_resource" / "nicknames.txt"
 
 
-def _load_nickname_pool() -> list[str]:
-    """Load the wuxia nickname pool from company/human_resource/nicknames.txt.
+def _nickname_language() -> str:
+    """Language whose nickname pool is used: "zh" (default wuxia pool) or another code."""
+    from onemancompany.core.i18n import get_company_language
+    return get_company_language() or "zh"
 
+
+def _load_nickname_pool(lang: str = "zh") -> list[str]:
+    """Load the nickname pool for *lang*.
+
+    "zh" uses company/human_resource/nicknames.txt (wuxia names); other
+    languages use nicknames.<lang>.txt and fall back to the Chinese pool.
     Reads from disk every call (磁盘即唯一真相源). The file is small (~1000 lines)
     so there is no measurable overhead.
     """
     # Runtime data dir takes priority (user may have customised it there)
     from onemancompany.core.config import DATA_ROOT
-    runtime_file = DATA_ROOT / "company" / "human_resource" / "nicknames.txt"
-    src = runtime_file if runtime_file.exists() else _NICKNAMES_FILE
+    filenames = ["nicknames.txt"] if lang == "zh" else [f"nicknames.{lang}.txt", "nicknames.txt"]
+    src = None
+    for filename in filenames:
+        for base in (DATA_ROOT / "company" / "human_resource", _NICKNAMES_FILE.parent):
+            candidate = base / filename
+            if candidate.exists():
+                src = candidate
+                break
+        if src:
+            break
 
-    if src.exists():
+    if src is not None:
         pool = [
             line.strip() for line in read_text_utf(src).splitlines() if line.strip()
         ]
         logger.debug("Loaded {} nicknames from {}", len(pool), src)
         return pool
 
-    logger.warning("Nickname file not found at {}; using built-in fallback", src)
+    logger.warning("Nickname file not found for language {}; using built-in fallback", lang)
     return []
 
 
 def _pick_nickname(char_count: int, existing: set[str]) -> str:
     """Pick a random wuxia nickname from the pool, avoiding collisions."""
     import random
+    lang = _nickname_language()
+    if lang != "zh":
+        # Non-Chinese pools are not split by character count
+        pool = [n for n in _load_nickname_pool(lang) if n not in existing]
+        if pool:
+            return random.choice(pool)
     pool = [n for n in _load_nickname_pool() if len(n) == char_count and n not in existing]
     if pool:
         return random.choice(pool)

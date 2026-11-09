@@ -1149,6 +1149,8 @@ class BaseAgentRunner:
         pb.add("filesystem", self._get_filesystem_section(), priority=66)
         pb.add("context", self._get_dynamic_context_section(), priority=70)
         pb.add("efficiency", self._get_efficiency_guidelines_section(), priority=80)
+        from onemancompany.core.i18n import language_directive
+        pb.add("language", language_directive(), priority=5)
         self._customize_prompt(pb)
         self._load_agent_prompt_sections(pb)
         return pb

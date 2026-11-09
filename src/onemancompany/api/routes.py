@@ -2128,6 +2128,66 @@ async def get_talent_pool() -> dict:
     return {"source": "local", "talents": talents}
 
 
+_CEO_NICKNAMES = {"zh": "老板", "fr": "Le Patron", "en": "The Boss"}
+
+
+def _nickname_matches_language(nickname: str, lang: str) -> bool:
+    """True when *nickname* already looks like it belongs to *lang*'s pool."""
+    has_cjk = any("\u4e00" <= ch <= "\u9fff" for ch in nickname)
+    return has_cjk if lang == "zh" else not has_cjk
+
+
+@router.get("/api/settings/language")
+async def get_language_settings() -> dict:
+    """Return the company language (UI + AI employees) and supported languages."""
+    from onemancompany.core.i18n import SUPPORTED_LANGUAGES, get_company_language
+
+    return {"language": get_company_language(), "supported": SUPPORTED_LANGUAGES}
+
+
+@router.put("/api/settings/language")
+async def update_language_settings(body: dict) -> dict:
+    """Set the company language.
+
+    Body: {"language": "fr", "rename_nicknames": true}
+    ``rename_nicknames`` re-assigns current employees' nicknames from the new
+    language's pool when they belong to another language.
+    """
+    import yaml
+    from onemancompany.agents.onboarding import _get_existing_nicknames, _pick_nickname
+    from onemancompany.core.config import APP_CONFIG_PATH, load_app_config, reload_app_config
+    from onemancompany.core.i18n import normalize_language
+
+    lang = normalize_language(body.get("language", ""))
+    if not lang:
+        raise HTTPException(status_code=400, detail="Unsupported language")
+
+    config = load_app_config()
+    config["language"] = lang
+    write_text_utf(APP_CONFIG_PATH, yaml.dump(config, default_flow_style=False, allow_unicode=True))
+    reload_app_config()
+
+    renamed: dict[str, str] = {}
+    if body.get("rename_nicknames"):
+        existing = _get_existing_nicknames()
+        for emp_id, emp in sorted(_load_all().items()):
+            current = emp.get("nickname", "") or ""
+            if current and _nickname_matches_language(current, lang):
+                continue
+            if emp_id == CEO_ID:
+                nickname = _CEO_NICKNAMES.get(lang, "")
+            else:
+                is_founding = int(emp.get("level", 1) or 1) >= 4
+                nickname = _pick_nickname(3 if is_founding else 2, existing)
+            if nickname:
+                existing.add(nickname)
+                await _store.save_employee(emp_id, {"nickname": nickname})
+                renamed[emp_id] = nickname
+
+    logger.info("Company language set to {} ({} nicknames renamed)", lang, len(renamed))
+    return {"status": "ok", "language": lang, "renamed": renamed}
+
+
 @router.get("/api/settings/api")
 async def get_api_settings() -> dict:
     """Return current global API configuration status for all providers."""
