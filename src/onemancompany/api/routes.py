@@ -5333,6 +5333,146 @@ async def get_tool_icon(tool_id: str):
     return FileResponse(icon_path, media_type="image/png")
 
 
+def _mcp_section(tool_id: str, tool_data: dict) -> dict:
+    """Access + actions section for an MCP connector tool."""
+    from onemancompany.core.config import CEO_ID as _CEO, employee_configs
+    from onemancompany.core.mcp_tools import missing_secrets
+
+    allowed = {str(u) for u in (tool_data.get("allowed_users") or [])}
+    employees = []
+    for emp_id, emp in sorted(_load_all().items()):
+        if emp_id == _CEO:
+            continue
+        cfg = employee_configs.get(emp_id)
+        hosting = getattr(cfg, "hosting", "") if cfg else emp.get("hosting", "")
+        employees.append({
+            "id": emp_id,
+            "name": emp.get("name", emp_id),
+            "nickname": emp.get("nickname", ""),
+            "claude_code": str(hosting) in ("self", "HostingMode.SELF"),
+            "granted": emp_id in allowed,
+        })
+    blocked = set(tool_data.get("disallowed_tools") or [])
+    actions = [
+        {**t, "allowed": t.get("name") not in blocked}
+        for t in (tool_data.get("available_tools") or [])
+    ]
+    spec = tool_data.get("mcp") or {}
+    return {
+        "type": "mcp",
+        "title": "MCP connector",
+        "tool_id": tool_id,
+        "transport": spec.get("type") or ("http" if spec.get("url") else "stdio"),
+        "endpoint": spec.get("url") or " ".join([str(spec.get("command", "")), *map(str, spec.get("args", []))]),
+        "source": tool_data.get("source", "custom"),
+        "missing_secrets": missing_secrets(tool_data),
+        "employees": employees,
+        "actions": actions,
+        "tested": "available_tools" in tool_data,
+    }
+
+
+@router.get("/api/mcp/catalog")
+async def mcp_catalog() -> dict:
+    """Ready-made MCP connectors the CEO can install in one click."""
+    from onemancompany.core.mcp_tools import CATALOG, list_mcp_tools
+
+    installed = {d.get("id") for d in list_mcp_tools().values()} | set(list_mcp_tools())
+    return {"catalog": [
+        {"id": c["id"], "name": c["name"], "description": c["description"],
+         "env_vars": c["env_vars"], "help_url": c.get("help_url", ""),
+         "installed": c["id"] in installed}
+        for c in CATALOG
+    ]}
+
+
+@router.get("/api/mcp/claude-code")
+async def mcp_claude_code_servers() -> dict:
+    """MCP servers configured in the CEO's own Claude Code (no secrets returned)."""
+    from onemancompany.core.mcp_tools import claude_code_servers
+
+    return {"servers": claude_code_servers()}
+
+
+@router.post("/api/mcp/connectors")
+async def mcp_create_connector(body: dict) -> dict:
+    """Install an MCP connector as a company tool.
+
+    Body: {"source": "catalog", "catalog_id": "stripe", "secrets": {...}}
+          {"source": "claude_code", "name": "photonet"}
+          {"source": "custom", "name": "My tool", "text": "<url | command | JSON>"}
+    """
+    from onemancompany.agents.coo_agent import _load_assets_from_disk
+    from onemancompany.core import mcp_tools
+
+    source = body.get("source")
+    try:
+        if source == "catalog":
+            tool_id = mcp_tools.create_from_catalog(str(body.get("catalog_id", "")), body.get("secrets") or {})
+        elif source == "claude_code":
+            tool_id = mcp_tools.import_claude_code_server(str(body.get("name", "")))
+        elif source == "custom":
+            name = str(body.get("name", "")).strip()
+            if not name:
+                raise ValueError("Name is required")
+            tool_id = mcp_tools.create_custom(name, str(body.get("text", "")), str(body.get("description", "")))
+        else:
+            raise ValueError("Unknown source")
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # malformed JSON, shlex errors…
+        raise HTTPException(status_code=400, detail=f"Invalid connector: {exc}")
+
+    _load_assets_from_disk()
+    probe = await mcp_tools.probe(tool_id)
+    return {"status": "ok", "tool_id": tool_id, "probe": probe}
+
+
+@router.post("/api/tools/{tool_id}/mcp-test")
+async def mcp_test_connector(tool_id: str) -> dict:
+    from onemancompany.core import mcp_tools
+
+    try:
+        return await mcp_tools.probe(tool_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.put("/api/tools/{tool_id}/mcp-access")
+async def mcp_update_access(tool_id: str, body: dict) -> dict:
+    """Body: {"allowed_users": [...], "disallowed_tools": [...]} (each optional)."""
+    from onemancompany.core import mcp_tools
+    from onemancompany.core.claude_session import stop_employee_daemons
+
+    before = mcp_tools.load_tool(tool_id) or {}
+    try:
+        data = mcp_tools.update_access(tool_id, body.get("allowed_users"), body.get("disallowed_tools"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    # Running CLI sessions keep their old connectors: restart the affected ones
+    affected = set(before.get("allowed_users") or []) | set(data.get("allowed_users") or [])
+    restarted = await stop_employee_daemons(affected) if affected else 0
+    tool = company_state.tools.get(tool_id)
+    if tool is not None:
+        tool.allowed_users = list(data.get("allowed_users") or [])
+    return {"status": "ok", "allowed_users": data.get("allowed_users", []),
+            "disallowed_tools": data.get("disallowed_tools", []), "restarted_sessions": restarted}
+
+
+@router.delete("/api/mcp/connectors/{tool_id}")
+async def mcp_delete_connector(tool_id: str) -> dict:
+    from onemancompany.agents.coo_agent import remove_tool
+    from onemancompany.core import mcp_tools
+    from onemancompany.core.claude_session import stop_employee_daemons
+
+    data = mcp_tools.load_tool(tool_id)
+    if not data or data.get("type") != "mcp":
+        raise HTTPException(status_code=404, detail="Not an MCP connector")
+    result = remove_tool(tool_id)
+    await stop_employee_daemons(set(data.get("allowed_users") or []))
+    return result
+
+
 @router.get("/api/tools/{tool_id}/definition")
 async def get_tool_definition(tool_id: str):
     """Return tool definition with dynamic sections for the tool detail view.
@@ -5449,9 +5589,11 @@ async def get_tool_definition(tool_id: str):
             **env_help_data,
         })
 
-    # 3. Access control section
+    # 3. Access control section (MCP connectors get a richer section)
     allowed = tool_data.get("allowed_users")
-    if allowed is not None:
+    if tool_data.get("type") == "mcp":
+        sections.append(_mcp_section(tool_id, tool_data))
+    elif allowed is not None:
         users_info = []
         for uid in (allowed or []):
             _access_emp = _load_emp(uid)

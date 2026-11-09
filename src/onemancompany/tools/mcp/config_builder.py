@@ -74,6 +74,11 @@ def build_mcp_config(
             },
         }
 
+    # MCP connectors installed as company tools (Tools panel), granted per employee
+    from onemancompany.core.mcp_tools import servers_for
+    for name, spec in servers_for(employee_id).items():
+        servers.setdefault(name, spec)
+
     # Extra MCP servers the CEO granted in config.yaml (`mcp_servers`)
     servers.update(company_mcp_servers_for(employee_id, reserved=set(servers)))
 
@@ -81,6 +86,24 @@ def build_mcp_config(
 
 
 _MCP_SPEC_KEYS = {"command", "args", "env", "type", "url", "headers", "cwd"}
+
+
+def disallowed_mcp_tools_for(employee_id: str) -> list[str]:
+    """Connector actions *employee_id* must not use (for ``--disallowedTools``)."""
+    from onemancompany.core.config import load_app_config
+    from onemancompany.core.mcp_tools import disallowed_for
+
+    names = disallowed_for(employee_id)
+    raw = load_app_config().get("mcp_servers") or {}
+    if isinstance(raw, dict):
+        for name, spec in raw.items():
+            if not isinstance(spec, dict):
+                continue
+            employees = spec.get("employees")
+            if employees is not None and str(employee_id) not in {str(e) for e in employees}:
+                continue
+            names += [f"mcp__{name}__{tool}" for tool in spec.get("disallowed_tools") or []]
+    return names
 
 
 def company_mcp_servers_for(employee_id: str, reserved: set[str] | None = None) -> dict:

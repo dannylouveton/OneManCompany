@@ -318,6 +318,15 @@ class ClaudeDaemon:
         # CEO's own Claude Code servers, which would otherwise be inherited
         # and usable without confirmation (--dangerously-skip-permissions).
         cmd += ["--strict-mcp-config"]
+        # Connector actions the CEO blocked (enforced even without permission prompts)
+        try:
+            from onemancompany.tools.mcp.config_builder import disallowed_mcp_tools_for
+            blocked = disallowed_mcp_tools_for(self.employee_id)
+        except Exception as exc:  # never block a session on a config error
+            logger.warning("[claude-daemon] cannot compute blocked tools for {}: {}", self.employee_id, exc)
+            blocked = []
+        if blocked:
+            cmd += ["--disallowedTools", ",".join(blocked)]
         # Skip the CEO's user-level settings (personal skills, plugins, hooks).
         # Talent plugins are installed at user scope, so employees that need
         # them keep user settings.
@@ -881,6 +890,22 @@ async def stop_all_daemons() -> int:
         await daemon.stop()
         count += 1
     _daemons.clear()
+    return count
+
+
+async def stop_employee_daemons(employee_ids: set[str] | list[str]) -> int:
+    """Stop the running CLI processes of these employees.
+
+    The next message starts a new process (resuming the same session) with
+    a freshly built MCP config — used when the CEO changes connector access.
+    """
+    wanted = {str(e) for e in employee_ids}
+    count = 0
+    for key, daemon in list(_daemons.items()):
+        if key.split(":", 1)[0] in wanted:
+            await daemon.stop()
+            _daemons.pop(key, None)
+            count += 1
     return count
 
 
