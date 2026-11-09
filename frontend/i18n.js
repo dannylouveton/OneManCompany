@@ -29,6 +29,7 @@
       "ACTIVITY LOG": "JOURNAL D'ACTIVITÉ",
       "API Connections": "Connexions API",
       "API Key": "Clé API",
+      "e.g. OneManCompany官网": "ex. Site web de OneManCompany",
       "Abort this task? All related sub-tasks will be cancelled": "Annuler cette tâche ? Toutes les sous-tâches liées seront annulées",
       "Activate Product": "Activer le produit",
       "Active": "Actif",
@@ -518,7 +519,9 @@
   }
 
   function translateAttrs(el) {
-    if (shouldSkip(el)) return;
+    // Inputs and textareas keep their value untouched, but their placeholder
+    // and title are UI text: only an explicit opt-out skips them.
+    if (!el || (el.closest && el.closest('[data-no-i18n]'))) return;
     for (const attr of ATTRS) {
       const value = el.getAttribute(attr);
       if (!value) continue;
@@ -532,9 +535,9 @@
     if (root.nodeType === Node.TEXT_NODE) { translateText(root); return; }
     if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_FRAGMENT_NODE) return;
     if (root.nodeType === Node.ELEMENT_NODE) {
-      if (shouldSkip(root)) return;
       translateAttrs(root);
       root.querySelectorAll('[title], [placeholder], [aria-label]').forEach(translateAttrs);
+      if (shouldSkip(root)) return;
     }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node;
