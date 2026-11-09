@@ -554,6 +554,7 @@
   const PATTERNS = {
     fr: [
       [/^(.*\S) Details$/, '$1 — Fiche'],
+      [/^Agent family switched to "(.*)"\. Active immediately\.$/, "Famille d'agent changée pour « $1 ». Effectif immédiatement."],
       [/^Connected — (\d+) actions available$/, 'Connecté — $1 actions disponibles'],
       [/^Connection failed: ([\s\S]*)$/, 'Échec de la connexion : $1'],
       [/^MCP connector "(.*)" imported from Claude Code\.$/, 'Connecteur MCP « $1 » repris de Claude Code.'],

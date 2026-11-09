@@ -3572,6 +3572,7 @@ class AppController {
   }
 
   _renderSelfHostedSection(empId, empData, container) {
+    this._renderAgentFamilyRow(empId, 'self', container);
     const sessions = empData.sessions || [];
     const hasActive = sessions.some(s => s.status === 'running');
     const statusColor = hasActive ? 'var(--pixel-green)' : 'var(--pixel-yellow)';
@@ -3586,10 +3587,6 @@ class AppController {
     section.className = 'emp-detail-section-content';
     section.style.cssText = 'display:flex;flex-direction:column;gap:3px;';
     section.innerHTML = `
-      <div style="display:flex;align-items:center;gap:4px;">
-        <span style="font-size:6px;color:var(--pixel-yellow);min-width:55px;">Agent Family</span>
-        <span style="font-size:6px;color:var(--pixel-cyan);">Claude Session</span>
-      </div>
       <div style="display:flex;align-items:center;gap:4px;">
         <span style="font-size:6px;color:var(--pixel-yellow);min-width:55px;">Model</span>
         <select id="emp-self-hosted-model" class="emp-model-select" style="flex:1;">
@@ -3623,7 +3620,40 @@ class AppController {
     });
   }
 
+  /** Agent family selector (LangChain / Claude Code / OpenClaw) — hot-swaps via /hosting */
+  _renderAgentFamilyRow(empId, currentHosting, container) {
+    const families = [['company', 'LangChain'], ['self', 'Claude Code'], ['openclaw', 'OpenClaw']];
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:3px;';
+    row.innerHTML = `
+      <span style="font-size:6px;color:var(--pixel-yellow);min-width:55px;">Agent Family</span>
+      <select class="emp-model-select emp-family-select" style="flex:1;" data-no-i18n>
+        ${families.map(([v, l]) => `<option value="${v}" ${v === currentHosting ? 'selected' : ''}>${l}</option>`).join('')}
+      </select>`;
+    const select = row.querySelector('select');
+    select.addEventListener('change', async () => {
+      select.disabled = true;
+      try {
+        const resp = await fetch(`/api/employee/${empId}/hosting`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ hosting: select.value }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.detail || resp.status);
+        this._showToast(`Agent family switched to "${select.value}". Active immediately.`, 'success');
+        this._loadModelOrApiKeySection(empId);
+      } catch (e) {
+        this._showToast('Failed: ' + e.message, 'error');
+        select.value = currentHosting;
+        select.disabled = false;
+      }
+    });
+    container.appendChild(row);
+    return row;
+  }
+
   _renderFallbackModelSection(empId, empData, container) {
+    this._renderAgentFamilyRow(empId, empData.hosting || 'company', container);
     const currentProvider = empData.api_provider || 'openrouter';
     const section = document.createElement('div');
     section.className = 'emp-detail-section-content emp-model-section';
