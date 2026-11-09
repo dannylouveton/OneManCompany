@@ -27,6 +27,7 @@ dependencies = [
     "ddgs>=8.0",
     # Pinned exactly: 0.10+ renamed/removed SetSessionModelRequest (see acp/adapter.py).
     "agent-client-protocol==0.9.0",
+    "filelock>=3.12",
 ]
 
 [project.optional-dependencies]
