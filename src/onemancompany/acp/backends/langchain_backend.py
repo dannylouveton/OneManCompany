@@ -283,9 +283,12 @@ def _make_http_proxy(
         )
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
+                from onemancompany.core.secret_store import CALLER_HEADER, caller_signature
+
                 response = await client.post(
                     f"{server_url}/api/internal/tool-call",
                     json=payload,
+                    headers={CALLER_HEADER: caller_signature(employee_id)},
                 )
                 return response.text
         except Exception as exc:  # noqa: BLE001

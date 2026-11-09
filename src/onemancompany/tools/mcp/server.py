@@ -61,8 +61,11 @@ def _close_client() -> None:
 
 def _call_tool(tool_name: str, args: dict) -> str:
     """Call a tool on the backend via the internal API. Returns JSON string."""
+    from onemancompany.core.secret_store import CALLER_HEADER, caller_signature
+
     resp = _get_client().post(
         "/api/internal/tool-call",
+        headers={CALLER_HEADER: caller_signature(EMPLOYEE_ID)},
         json={
             "employee_id": EMPLOYEE_ID,
             "task_id": TASK_ID,
@@ -102,6 +105,10 @@ def _register_mcp_tool(mcp: FastMCP, tool) -> None:
     properties = schema.get("properties", {})
     required = set(schema.get("required", []))
     tool_name = tool.name
+    # employee_id as caller identity (optional) is filled by the server from
+    # the signed caller: never let the model choose it.
+    if "employee_id" in properties and "employee_id" not in required:
+        properties = {k: v for k, v in properties.items() if k != "employee_id"}
     param_names = list(properties.keys())
 
     def make_handler(name: str, params: list[str]):

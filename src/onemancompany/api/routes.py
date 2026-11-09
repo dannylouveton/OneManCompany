@@ -6373,7 +6373,7 @@ class _RoutesSnapshot:
 
 
 @router.post("/api/internal/tool-call")
-async def internal_tool_call(body: dict) -> dict:
+async def internal_tool_call(body: dict, request: Request) -> dict:
     """Generic tool-call endpoint for MCP server (Claude CLI).
 
     Body: {employee_id, task_id, tool_name, args: {...}}
@@ -6387,6 +6387,8 @@ async def internal_tool_call(body: dict) -> dict:
         _current_task_id,
     )
 
+    from onemancompany.core.secret_store import CALLER_HEADER, verify_caller
+
     employee_id = body.get("employee_id", "")
     task_id = body.get("task_id", "")
     tool_name = body.get("tool_name", "")
@@ -6394,6 +6396,10 @@ async def internal_tool_call(body: dict) -> dict:
 
     if not tool_name:
         raise HTTPException(400, "Missing tool_name")
+    # The employee id must be signed by OneManCompany's own tool bridge:
+    # an employee cannot call this endpoint as someone else.
+    if not verify_caller(str(employee_id), request.headers.get(CALLER_HEADER)):
+        raise HTTPException(403, "Unsigned or invalid caller")
 
     # For MCP calls, set task_id context var (vessel doesn't set it)
     task_token = None

@@ -324,7 +324,13 @@ async def execute_tool(employee_id: str, tool_name: str, args: dict) -> dict:
         # Defense-in-depth: auto-fill employee_id for MCP/CLI callers.
         # (LangChain proxied tools inject it at the proxy layer and strip it
         # from the LLM schema, so this only fires for MCP HTTP bridge calls.)
-        if employee_id and not args.get("employee_id"):
+        # The caller's identity always wins over a value the model put in
+        # args (an employee must not act as another one). Tools where
+        # employee_id is a required business parameter (a target) keep it.
+        schema = getattr(fn, "args_schema", None)
+        fields = getattr(schema, "model_fields", {}) if schema else {}
+        is_identity = "employee_id" in fields and not fields["employee_id"].is_required()
+        if employee_id and (is_identity or not args.get("employee_id")):
             args["employee_id"] = employee_id
 
         # Pre-tool hooks

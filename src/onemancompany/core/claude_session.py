@@ -293,12 +293,18 @@ def agent_sandbox_settings() -> dict | None:
         rule_path = "/" + path  # "//abs/path" = absolute path in permission rules
         targets = [rule_path, rule_path + "/**"] if Path(path).is_dir() else [rule_path]
         deny += [f"{tool}({t})" for t in targets for tool in ("Read", "Edit")]
+    # Shell commands must not call OneManCompany's own API (approve their
+    # own API calls, change access rights…): only the CEO's browser does.
+    port = str(os.environ.get("PORT") or 8000)
+    local_api = [f"{h}:{port}" for h in ("localhost", "127.0.0.1", "[::1]", "0.0.0.0")]
+    deny += [f"WebFetch(domain:{h})" for h in ("localhost", "127.0.0.1")]
     return {
         "sandbox": {
             "enabled": True,
             "allowUnsandboxedCommands": False,
             "failIfUnavailable": True,
             "filesystem": {"allowWrite": allow_write, "denyRead": secrets, "denyWrite": secrets},
+            "network": {"deniedDomains": local_api},
         },
         "permissions": {"deny": deny},
     }

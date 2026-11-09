@@ -445,6 +445,8 @@ def _bootstrap_data_dir() -> None:
 async def lifespan(app: FastAPI):
     # Bootstrap data directory on first run
     _bootstrap_data_dir()
+    from onemancompany.core.secret_store import ensure_internal_key
+    ensure_internal_key()  # signs internal tool calls (caller identity)
 
     # Eagerly load assets (tools, meeting rooms) into company_state
     from onemancompany.agents.coo_agent import _load_assets_from_disk

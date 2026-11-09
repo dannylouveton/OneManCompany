@@ -346,7 +346,7 @@ def read_log(tool_id: str, limit: int = 30) -> list[dict]:
         try:
             out.append(json.loads(line))
         except ValueError:
-            continue
+            logger.debug("Skipping malformed API log line in {}", tool_id)
     return list(reversed(out))
 
 
@@ -402,6 +402,7 @@ def list_pending(tool_id: str) -> list[dict]:
         try:
             item = json.loads(path.read_text(encoding="utf-8"))
         except ValueError:
+            logger.warning("Skipping malformed pending API call {}", path)
             continue
         if item.get("status") == "pending":
             items.append(item)

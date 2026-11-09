@@ -66,8 +66,10 @@ class DotEnvSecretStore:
         self.path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         try:
             self.path.chmod(0o600)
-        except OSError:  # pragma: no cover - non-POSIX filesystems
-            pass
+        except OSError as exc:  # pragma: no cover - non-POSIX filesystems
+            from loguru import logger
+
+            logger.warning("Cannot restrict permissions of {}: {}", self.path, exc)
 
     def set_many(self, values: dict[str, str]) -> None:
         values = {k: v for k, v in values.items() if v}
@@ -112,3 +114,44 @@ def secret_env_names() -> set[str]:
         return get_secret_store().names()
     except Exception:  # never break session start on a store error
         return set()
+
+
+# ---------------------------------------------------------------------------
+# Caller identity for internal tool calls
+# ---------------------------------------------------------------------------
+# Tool calls reach the server through /api/internal/tool-call. The caller
+# (OneManCompany's MCP server or the ACP subprocess) signs the employee id
+# with a company key that employees cannot read (stripped from their
+# environment, .env denied by the sandbox), so an employee cannot act as
+# another one by changing employee_id.
+
+INTERNAL_KEY_NAME = "OMC_INTERNAL_KEY"
+CALLER_HEADER = "X-OMC-Caller"
+
+
+def ensure_internal_key() -> str:
+    store = get_secret_store()
+    key = store.get(INTERNAL_KEY_NAME)
+    if not key:
+        import secrets as _secrets
+
+        key = _secrets.token_hex(32)
+        store.set_many({INTERNAL_KEY_NAME: key})
+    return key
+
+
+def caller_signature(employee_id: str) -> str:
+    import hashlib
+    import hmac
+
+    key = get_secret_store().get(INTERNAL_KEY_NAME) or ""
+    if not key:
+        return ""
+    return hmac.new(key.encode(), f"caller:{employee_id}".encode(), hashlib.sha256).hexdigest()
+
+
+def verify_caller(employee_id: str, signature: str | None) -> bool:
+    import hmac
+
+    expected = caller_signature(employee_id)
+    return bool(expected and signature) and hmac.compare_digest(expected, str(signature))

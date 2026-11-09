@@ -25,6 +25,12 @@ def clean_test_tools():
             tool_registry._meta.pop(name, None)
 
 
+@pytest.fixture(autouse=True)
+def signed_caller(monkeypatch):
+    """Requests in these tests come from OneManCompany's own tool bridge."""
+    monkeypatch.setattr("onemancompany.core.secret_store.verify_caller", lambda emp, sig: True)
+
+
 def _make_app():
     from fastapi import FastAPI
     app = FastAPI()
@@ -115,3 +121,31 @@ class TestInternalToolCall:
         data = resp.json()
         assert data["status"] == "error"
         assert "something broke" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_unsigned_caller_is_rejected(monkeypatch):
+    monkeypatch.setattr("onemancompany.core.secret_store.verify_caller", lambda emp, sig: False)
+    app = _make_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/api/internal/tool-call", json={
+            "employee_id": "00006", "task_id": "", "tool_name": "list_company_apis", "args": {},
+        })
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_caller_identity_overrides_employee_id_in_args():
+    """An employee cannot act as another one by putting employee_id in args."""
+    from langchain_core.tools import tool as lc_tool
+
+    from onemancompany.core.tool_registry import execute_tool
+
+    @lc_tool
+    def test_whoami(employee_id: str = "") -> dict:
+        """Return the caller."""
+        return {"caller": employee_id}
+
+    tool_registry.register(test_whoami, ToolMeta(name="test_whoami", category="base"))
+    result = await execute_tool("00004", "test_whoami", {"employee_id": "00006"})
+    assert result.get("caller") == "00004" or "00004" in str(result)

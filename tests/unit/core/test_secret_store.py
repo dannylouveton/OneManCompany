@@ -32,3 +32,19 @@ def test_session_env_strips_secrets(monkeypatch):
     from onemancompany.core import claude_session
 
     assert "secret_env_names()" in inspect.getsource(claude_session.ClaudeDaemon.start)
+
+
+def test_caller_signature(tmp_path, monkeypatch):
+    from onemancompany.core import secret_store
+
+    store = secret_store.DotEnvSecretStore(tmp_path / ".env")
+    monkeypatch.setattr(secret_store, "get_secret_store", lambda: store)
+    monkeypatch.delenv(secret_store.INTERNAL_KEY_NAME, raising=False)
+    assert secret_store.caller_signature("00006") == ""
+    assert not secret_store.verify_caller("00006", "")
+    secret_store.ensure_internal_key()
+    sig = secret_store.caller_signature("00006")
+    assert secret_store.verify_caller("00006", sig)
+    assert not secret_store.verify_caller("00004", sig)
+    assert not secret_store.verify_caller("00006", None)
+    monkeypatch.delenv(secret_store.INTERNAL_KEY_NAME, raising=False)
