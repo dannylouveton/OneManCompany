@@ -287,3 +287,14 @@ async def test_task_left_waiting_is_resumed_by_reconcile(desk, tmp_path, monkeyp
     assert await access_desk.reconcile() == 1
     assert reruns[0][0] == asker.id and "pas maintenant" in reruns[0][1]
     assert await access_desk.reconcile() == 0  # delivered once
+
+
+def test_thread_lines_for_an_opened_request_and_an_action_card(desk, monkeypatch):
+    monkeypatch.setattr(access_desk, "_lang", lambda: "fr")
+    req, _ = access_desk.submit("00007", "OVH DNS", "lire la zone", opened_by="le CEO")
+    entry = req["requesters"][0]
+    assert entry["opened_by"] == "le CEO"
+    assert "Demande ouverte par le CEO" in access_desk.thread_text("requested", req, entry)
+    access_desk.escalate(req["id"], what="Exporter la zone DNS", why="inventaire", deliverable="action")
+    line = access_desk.thread_text("escalated", access_desk.get_request(req["id"]))
+    assert "a envoyé une demande au CEO" in line and "de créer" not in line

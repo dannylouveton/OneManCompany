@@ -355,7 +355,11 @@ def thread_text(event: str, req: dict, entry: dict | None = None) -> str:
         return (f"🔑 Access request: {service} ({rights}) — {label(entry['employee'])}. Why: "
                 f"{entry.get('reason', '')}{sent}")
     if event == "escalated":
-        what = (req.get("card") or {}).get("what", "")
+        card = req.get("card") or {}
+        what = card.get("what", "")
+        if card.get("deliverable") == "action":  # nothing to create: something for the CEO to do
+            return (f"🔑 {service} : le COO a envoyé une demande au CEO : « {what} ». La carte attend dans la boîte 🔑."
+                    if fr else f"🔑 {service}: the COO sent the CEO a request: \"{what}\". The card is in the 🔑 box.")
         return (f"🔑 {service} : le COO demande au CEO de créer « {what} ». La carte attend dans la boîte 🔑."
                 if fr else f"🔑 {service}: the COO asked the CEO to create \"{what}\". The card is in the 🔑 box.")
     return "🔑 " + outcome_text(req, entry or {})
