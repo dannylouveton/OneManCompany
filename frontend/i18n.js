@@ -104,6 +104,7 @@
       "No HTTP API (command line only)": "Pas d'API HTTP (ligne de commande seulement)",
       "Requests": "Demandes",
       "Access history": "Historique des accès",
+      "Writes limited to": "Écritures limitées à",
       "Call failed": "L'appel a échoué",
       "Rules": "Règles",
       "Rules for this employee only. Changing them makes them personal": "Règles de cet employé uniquement. Les modifier les rend personnelles",

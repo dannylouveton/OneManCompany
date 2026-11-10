@@ -179,3 +179,18 @@ def test_requests_for_tool_and_storage(desk, tmp_path):
     assert stored[0]["history"][0]["event"] == "requested"
     assert KEY not in (tmp_path / "access_requests.yaml").read_text()
     assert access_desk.get_request(req["id"])["requesters"][0]["label"] == "Le Diplomate (Lead DevOps / SRE)"
+
+
+def test_rpc_api_and_limited_writes(desk):
+    """Telegram acts with GET too: no free reads; the COO limits writes to sending messages."""
+    req, _ = access_desk.submit("00007", "Telegram bot", "envoyer les alertes", access="write")
+    access_desk.escalate(req["id"], what="Un bot Telegram", why="alertes", setup={"preset": "telegram"},
+                         allowed_writes=["post /sendMessage"])
+    done, tool_id = access_desk.provide(req["id"], "123456:ABCDEF_bot_token")
+    data = api_tools.load_tool(tool_id)
+    assert data["api"]["rpc"] is True and data["api"]["auth"]["in"] == "path"
+    assert api_tools.effective_rules(data, "00007")["allowed_writes"] == ["POST /sendMessage"]
+    assert api_tools.decide(data, "00007", "POST", "/sendMessage")[0] == "allowed"
+    assert api_tools.decide(data, "00007", "GET", "/sendMessage")[0] == "denied"
+    assert api_tools.decide(data, "00007", "POST", "/deleteMessage")[0] == "denied"
+    assert done["status"] == "done"

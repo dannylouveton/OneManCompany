@@ -66,7 +66,7 @@ SERVICE_PRESETS: dict[str, dict] = {
     },
     "telegram": {
         "name": "Telegram bot", "base_url": "https://api.telegram.org",
-        "auth_in": "path", "auth_name": "", "auth_format": "/bot{key}",
+        "auth_in": "path", "auth_name": "", "auth_format": "/bot{key}", "rpc": True,
         "docs_url": "https://core.telegram.org/bots/api", "where_url": "https://t.me/BotFather",
     },
     "intercom": {
@@ -76,7 +76,8 @@ SERVICE_PRESETS: dict[str, dict] = {
         "docs_url": "https://developers.intercom.com/docs/references/rest-api",
     },
 }
-_SETUP_FIELDS = ("name", "base_url", "auth_in", "auth_name", "auth_format", "exchange", "headers", "docs_url", "cli")
+_SETUP_FIELDS = ("name", "base_url", "auth_in", "auth_name", "auth_format", "exchange", "headers", "docs_url", "cli",
+                 "rpc")
 
 
 # ---------------------------------------------------------------------------
@@ -376,15 +377,22 @@ def normalize_setup(setup: dict | None) -> dict:
         out["cli"] = normalize_cli(out["cli"])
     if out.get("headers") and not isinstance(out["headers"], dict):
         raise ValueError("headers must be an object of header names and values")
+    if "rpc" in out:
+        out["rpc"] = bool(out["rpc"])
     return out
 
 
 def escalate(request_id: str, *, what: str, why: str, where_url: str = "", rights: str = "",
              deliverable: str = "key", setup: dict | None = None, tool_id: str = "",
-             by: str = "COO") -> dict:
-    """Ask the CEO to create what only they can create. Validates the waiting requesters."""
+             allowed_writes: list[str] | None = None, by: str = "COO") -> dict:
+    """Ask the CEO to create what only they can create. Validates the waiting requesters.
+
+    ``allowed_writes`` limits what employees asking for write access may do
+    once the key is there (e.g. ["POST /sendMessage"]); reads stay allowed.
+    """
     from onemancompany.core import api_tools
 
+    writes = api_tools._normalize_rules({"allowed_writes": allowed_writes or []})["allowed_writes"]
     what = str(what or "").strip()
     why = str(why or "").strip()
     if not what or not why:
@@ -403,7 +411,8 @@ def escalate(request_id: str, *, what: str, why: str, where_url: str = "", right
         if req.get("status") not in ACTIVE:
             raise ValueError(f"Request {request_id} is already {req.get('status')}")
         req["card"] = {"what": what[:1000], "why": why[:2000], "where_url": where_url[:500], "rights": str(rights or "")[:1000],
-                       "deliverable": deliverable, "setup": clean, "tool_id": tool_id, "by": by, "at": _now()}
+                       "deliverable": deliverable, "setup": clean, "tool_id": tool_id, "allowed_writes": writes,
+                       "by": by, "at": _now()}
         for q in req["requesters"]:
             if q.get("status") == "new":
                 q["status"] = "validated"
@@ -446,12 +455,13 @@ def provide(request_id: str, key: str, *, overrides: dict | None = None, note: s
             auth_in=setup.get("auth_in", "header"), auth_name=setup.get("auth_name") or "Authorization",
             auth_format=setup.get("auth_format") or "Bearer {key}", docs_url=setup.get("docs_url", ""),
             description=f"{req['service']} — {card.get('what', '')}"[:200], headers=setup.get("headers"),
-            exchange=setup.get("exchange"), cli=setup.get("cli"), added_by=by,
+            exchange=setup.get("exchange"), cli=setup.get("cli"), added_by=by, rpc=bool(setup.get("rpc")),
         )
     granted = []
     for q in req["requesters"]:
         if q.get("status") == "validated":
             api_tools.grant_employee(tool_id, q["employee"], access=q.get("access", "read"),
+                                     allowed_writes=card.get("allowed_writes") or None,
                                      reason=q.get("reason", ""), request_id=request_id, by=by)
             granted.append(q["employee"])
     with _lock:

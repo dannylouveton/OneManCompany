@@ -337,7 +337,8 @@ def _hold_current_task(request_id: str) -> bool:
 def escalate_access_request(request_id: str, what_to_create: str, why: str, minimal_rights: str = "",
                             where_url: str = "", preset: str = "", base_url: str = "", auth: str = "",
                             docs_url: str = "", cli: str = "", existing_tool_id: str = "",
-                            deliverable: str = "key", employee_id: str = "") -> dict:
+                            allowed_writes: list[str] | None = None, deliverable: str = "key",
+                            employee_id: str = "") -> dict:
     """Ask the CEO to create what only they can create (key, token, account, invitation).
 
     The CEO gets a card in their "Access requests" box and only has to paste
@@ -361,6 +362,9 @@ def escalate_access_request(request_id: str, what_to_create: str, why: str, mini
         docs_url: API documentation link.
         cli: Command-line tool to unlock: "scalingo" or "gh", or "command:KEY_VARIABLE".
         existing_tool_id: The company tool exists but needs a new key (expired, revoked).
+        allowed_writes: For employees asking for write access through the API: allow
+            only these calls once the key is there, e.g. ["POST /sendMessage"]
+            ("METHOD /path", * = any segment). Without it, write access means all writes.
         deliverable: "key" (default: the CEO pastes a key) or "action" (the CEO does
             something, e.g. sends an invitation, with nothing to paste).
         employee_id: Your employee ID (auto-filled).
@@ -373,7 +377,8 @@ def escalate_access_request(request_id: str, what_to_create: str, why: str, mini
         if parsed_cli:
             setup["cli"] = parsed_cli
         access_desk.escalate(request_id, what=what_to_create, why=why, where_url=where_url, rights=minimal_rights,
-                             deliverable=deliverable, setup=setup, tool_id=existing_tool_id, by=_actor(employee_id))
+                             deliverable=deliverable, setup=setup, tool_id=existing_tool_id,
+                             allowed_writes=allowed_writes, by=_actor(employee_id))
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
     if _hold_current_task(request_id):

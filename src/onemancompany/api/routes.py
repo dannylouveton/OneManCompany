@@ -5652,7 +5652,9 @@ def _access_card(req: dict) -> dict:
             "auth_format": setup.get("auth_format", ""), "docs_url": setup.get("docs_url", ""),
             "exchange": bool(setup.get("exchange")),
             "cli": (setup.get("cli") or {}).get("command", ""),
+            "rpc": bool(setup.get("rpc")),
         },
+        "allowed_writes": card.get("allowed_writes") or [],
         "requesters": [{
             "employee": q["employee"], "label": q.get("label") or access_desk.label(q["employee"]),
             "access": q.get("access"), "kind": q.get("kind"), "status": q.get("status"),

@@ -7499,6 +7499,7 @@ class AppController {
         <div class="access-what">${esc(r.what)}</div>
         ${r.where_url ? `<a class="mcp-link" href="${esc(r.where_url)}" target="_blank" rel="noopener">${t('Create it here →')}</a>` : ''}
         ${r.rights ? `<div class="access-row"><span class="access-label">${t('Minimum rights')}</span><span class="access-text">${esc(r.rights)}</span></div>` : ''}
+        ${(r.allowed_writes || []).length ? `<div class="access-row"><span class="access-label">${t('Writes limited to')}</span>${r.allowed_writes.map(w => `<code>${esc(w)}</code>`).join(' ')}</div>` : ''}
         <div class="access-row"><span class="access-label">${t('Why')}</span><span class="access-text">${esc(r.why)}</span></div>
         <div class="access-row"><span class="access-label">${t('Waiting for it')}</span><ul class="access-who">${who || '<li>—</li>'}</ul></div>
         ${isKey ? `<label class="mcp-field">${t('Key')}<input type="password" class="access-key" autocomplete="new-password" placeholder="${t('Paste the key here')}"></label>` : ''}

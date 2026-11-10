@@ -115,7 +115,7 @@ def _normalize_rules(rules: dict | None) -> dict:
             continue
         method, _, path = pattern.partition(" ")
         method = method.upper()
-        if method not in ALL_METHODS - READ_METHODS and method != "*":
+        if method not in ALL_METHODS and method != "*":
             raise ValueError(f"Invalid write rule: {pattern}")
         writes.append(f"{method} {'/' + path.lstrip('/') if path else '/*'}")
     return {
@@ -172,7 +172,7 @@ def create_api_tool(name: str, base_url: str, key: str, *, auth_in: str = "heade
                     auth_name: str = "Authorization", auth_format: str = "Bearer {key}",
                     docs_url: str = "", description: str = "", headers: dict | None = None,
                     exchange: dict | None = None, cli: dict | str | None = None,
-                    added_by: str = "CEO") -> str:
+                    added_by: str = "CEO", rpc: bool = False) -> str:
     """Store the key and create the tool. ``base_url`` may be empty for a CLI-only tool."""
     from onemancompany.core.cli_relay import normalize_cli
     from onemancompany.core.secret_store import get_secret_store
@@ -213,6 +213,8 @@ def create_api_tool(name: str, base_url: str, key: str, *, auth_in: str = "heade
         "allowed_users": [],
         "rules": dict(DEFAULT_RULES),
     }
+    if rpc:
+        data["api"]["rpc"] = True
     if cli_spec:
         data["cli"] = cli_spec
     save_tool(tool_id, data)
@@ -360,13 +362,17 @@ def _clean_path(path: str) -> str:
 
 
 def decide(data: dict, employee_id: str, method: str, path: str) -> tuple[str, str]:
-    """Return (decision, reason) with decision in allowed / approval / denied."""
+    """Return (decision, reason) with decision in allowed / approval / denied.
+
+    APIs where any call can act (``api.rpc``, e.g. Telegram's /sendMessage
+    works with GET) get no free reads: every call must be allowed by the rules.
+    """
     if not _granted(data, employee_id):
         return "denied", "You do not have access to this API. Ask for it with request_access()."
     method = method.upper()
     if method not in ALL_METHODS:
         return "denied", f"Unsupported HTTP method: {method}"
-    if method in READ_METHODS:
+    if method in READ_METHODS and not (data.get("api") or {}).get("rpc"):
         return "allowed", ""
     rules = effective_rules(data, employee_id)
     bare = path.split("?")[0]
