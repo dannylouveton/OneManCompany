@@ -7222,3 +7222,21 @@ button:disabled, [aria-disabled="true"] {
 .vault-people { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; font-size: 12px; max-height: 160px; overflow-y: auto; }
 .vault-people label, .vault-generate { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .vault-holders { margin-top: 6px; }
+
+/* ── Live view of an employee's browser ─────────────────────────────────── */
+.browser-live { z-index: 3000; }
+.browser-live-content { width: min(1320px, 96vw); max-width: 96vw; max-height: 96vh; padding: 8px; display: flex;
+  flex-direction: column; gap: 6px; overflow: hidden; }
+.browser-live-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.browser-live-title { font-weight: bold; margin-right: 4px; white-space: nowrap; }
+.browser-live-url { flex: 1; min-width: 220px; font-family: monospace; font-size: 12px; padding: 4px 6px;
+  background: rgba(0,0,0,0.3); color: inherit; border: 1px solid var(--border, #444); border-radius: 3px; }
+.browser-live-fill { max-width: 240px; font-size: 12px; padding: 3px; background: rgba(0,0,0,0.3); color: inherit;
+  border: 1px solid var(--border, #444); border-radius: 3px; }
+.browser-live-stage { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; }
+.browser-live-canvas { max-width: 100%; max-height: calc(96vh - 90px); width: auto; height: auto; background: #fff;
+  cursor: default; outline: none; border: 1px solid var(--border, #444); image-rendering: auto; }
+.browser-live-keys { position: absolute; left: -9999px; top: 0; width: 10px; height: 10px; opacity: 0; }
+.browser-live-status { position: absolute; top: 45%; left: 0; right: 0; text-align: center; font-size: 13px;
+  color: #888; pointer-events: none; }
+.browser-live-hint { font-size: 11px; }

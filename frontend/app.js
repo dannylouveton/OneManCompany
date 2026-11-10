@@ -446,12 +446,19 @@ class AppController {
         return { text: `🔑 ${p.title || 'Credentials required'}`, cls: 'system', agent: p.agent || 'SYSTEM' };
       },
       'access_request_update': (p) => {
-        this._setAccessBadge(p.waiting_ceo || 0);
         const panel = document.getElementById('access-panel');
-        if (panel && !panel.classList.contains('hidden')) this._loadAccessRequests();
+        const tab = document.querySelector('#access-panel .access-tab.active')?.dataset.tab || 'requests';
+        if (p.browser_ask) {
+          this._refreshAccessBadge();
+          if (panel && !panel.classList.contains('hidden') && tab === 'browsers') this._loadBrowsers();
+        } else {
+          this._setAccessBadge((p.waiting_ceo || 0) + (this._extraAsks || 0));
+          if (panel && !panel.classList.contains('hidden') && tab === 'requests') this._loadAccessRequests();
+        }
         if (p.new_card) {
-          this._showToast(`${this._t('Access request for you')}: ${p.service || ''}`, 'info', 6000);
-          return { text: `🔑 ${this._t('Access request for you')}: ${p.service || ''}`, cls: 'ceo', agent: 'COO' };
+          const what = this._t(p.browser_ask ? 'A browser is waiting for you' : 'Access request for you');
+          this._showToast(`${what}: ${p.service || ''}`, 'info', 6000);
+          return { text: `🔑 ${what}: ${p.service || ''}`, cls: 'ceo', agent: p.browser_ask ? 'DSI' : 'COO' };
         }
         return null;
       },
@@ -7444,7 +7451,8 @@ class AppController {
   async _refreshAccessBadge() {
     try {
       const data = await fetch('/api/access-requests?status=waiting_ceo').then(r => r.json());
-      this._setAccessBadge((data.waiting_ceo || 0) + (data.vault_asks || 0));
+      this._extraAsks = (data.vault_asks || 0) + (data.browser_asks || 0);
+      this._setAccessBadge((data.waiting_ceo || 0) + this._extraAsks);
     } catch (e) { /* offline: keep the last count */ }
   }
 
@@ -7452,7 +7460,10 @@ class AppController {
     document.querySelectorAll('#access-panel .access-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
     document.getElementById('access-list')?.classList.toggle('hidden', tab !== 'requests');
     document.getElementById('vault-list')?.classList.toggle('hidden', tab !== 'vault');
-    if (tab === 'vault') this._loadVault(); else this._loadAccessRequests();
+    document.getElementById('browser-list')?.classList.toggle('hidden', tab !== 'browsers');
+    if (tab === 'vault') this._loadVault();
+    else if (tab === 'browsers') this._loadBrowsers();
+    else this._loadAccessRequests();
   }
 
   async _loadAccessRequests() {
@@ -7466,14 +7477,204 @@ class AppController {
       list.innerHTML = `<div class="access-empty">${esc(this._t('Could not load the requests'))}</div>`;
       return;
     }
-    this._setAccessBadge((data.waiting_ceo || 0) + (data.vault_asks || 0));
+    this._extraAsks = (data.vault_asks || 0) + (data.browser_asks || 0);
+    this._setAccessBadge((data.waiting_ceo || 0) + this._extraAsks);
     const items = data.requests || [];
     const vaultHint = data.vault_asks
       ? `<div class="vault-hint">${esc(this._t('The vault is waiting for you'))} (${data.vault_asks}) <button class="pixel-btn small" onclick="window.app._accessTab('vault')">${esc(this._t('Open the vault'))}</button></div>`
       : '';
-    list.innerHTML = vaultHint + (items.length
+    const browserHint = data.browser_asks
+      ? `<div class="vault-hint">${esc(this._t('A browser is waiting for you'))} (${data.browser_asks}) <button class="pixel-btn small" onclick="window.app._accessTab('browsers')">${esc(this._t('See'))}</button></div>`
+      : '';
+    list.innerHTML = vaultHint + browserHint + (items.length
       ? items.map(r => this._renderAccessCard(r, esc)).join('')
       : `<div class="access-empty">${esc(this._t('Nothing for you: the COO handles the requests and only sends you what needs a key or an account.'))}</div>`);
+  }
+
+  // ── Browsers: watch and take over an employee's browser ──────────────
+
+  async _loadBrowsers() {
+    const box = document.getElementById('browser-list');
+    if (!box) return;
+    const esc = (v) => this._escapeHtml(v == null ? '' : String(v));
+    const t = (s) => esc(this._t(s));
+    let data;
+    try {
+      data = await fetch('/api/browsers').then(r => r.json());
+    } catch (e) {
+      box.innerHTML = `<div class="access-empty">${t('Could not load the browsers')}</div>`;
+      return;
+    }
+    const asks = data.asks || [];
+    const browsers = data.browsers || [];
+    const askCard = (a) => `
+      <div class="access-card vault-card vault-asking">
+        <div class="access-head"><span class="access-service">${esc(a.label)}</span>
+          <span class="perm-tag">${esc((a.at || '').replace('T', ' ').slice(0, 16))}</span></div>
+        <div class="access-text">${esc(a.what)}</div>
+        ${a.url ? `<div class="mcp-hint">${esc(a.url)}</div>` : ''}
+        <div class="access-actions">
+          <button class="pixel-btn small" onclick="window.app._openBrowserLive('${esc(a.employee_id)}', '${esc(a.id)}')">${t('Open the browser')}</button>
+          <button class="pixel-btn small secondary" onclick="window.app._browserAskDone('${esc(a.employee_id)}', '${esc(a.id)}')">${t('Done')}</button>
+        </div>
+      </div>`;
+    const row = (b) => `
+      <div class="access-card">
+        <div class="access-head"><span class="access-service">${esc(b.label)}</span>
+          <span class="perm-tag">${b.open ? t('open') : t('closed')}</span></div>
+        ${b.url ? `<div class="mcp-hint">${esc(b.title || '')} — ${esc(b.url)}</div>` : ''}
+        <div class="access-actions">
+          <button class="pixel-btn small" onclick="window.app._openBrowserLive('${esc(b.id)}', '')">${t('Open the browser')}</button>
+          ${b.open ? `<button class="pixel-btn small secondary" onclick="window.app._browserClose('${esc(b.id)}')">${t('Close')}</button>` : ''}
+        </div>
+      </div>`;
+    box.innerHTML = `
+      <div class="vault-intro">${t('Employees work in these browsers without ever seeing a password. Sign in here once to your admin accounts: the session stays. Captchas, SMS codes, payments and terms of service are done by you, here.')}</div>
+      ${asks.length ? asks.map(askCard).join('') : ''}
+      ${browsers.length ? browsers.map(row).join('') : `<div class="access-empty">${t('No browser yet')}</div>`}`;
+  }
+
+  async _browserAskDone(empId, askId) {
+    const data = await this._vaultCall(`/api/browsers/${encodeURIComponent(empId)}/asks/${encodeURIComponent(askId)}/done`, 'POST', {});
+    if (data) {
+      this._showToast(this._t('Done: the employee carries on'), 'success');
+      this._refreshAccessBadge();
+      this._loadBrowsers();
+    }
+    return data;
+  }
+
+  async _browserClose(empId) {
+    await this._vaultCall(`/api/browsers/${encodeURIComponent(empId)}/close`, 'POST', {});
+    this._loadBrowsers();
+  }
+
+  async _openBrowserLive(empId, askId) {
+    this._closeBrowserLive();
+    const esc = (v) => this._escapeHtml(v == null ? '' : String(v));
+    const t = (s) => esc(this._t(s));
+    let vaultItems = [];
+    try { vaultItems = ((await fetch('/api/vault').then(r => r.json())).items || []).filter(i => i.has_password || i.has_totp); } catch (e) { /* no vault list */ }
+    const label = ((this._cachedEmployees || []).find(e => e.id === empId) || {}).nickname || empId;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay browser-live';
+    overlay.innerHTML = `
+      <div class="modal-content browser-live-content">
+        <div class="browser-live-bar">
+          <span class="browser-live-title">🌐 ${t('Browser of')} ${esc(label)}</span>
+          <button class="pixel-btn small secondary" data-act="back" title="${t('Back')}">←</button>
+          <button class="pixel-btn small secondary" data-act="reload" title="${t('Reload')}">⟳</button>
+          <input class="browser-live-url" type="text" spellcheck="false" placeholder="https://">
+          <button class="pixel-btn small" data-act="go">${t('Go')}</button>
+          <select class="browser-live-fill" title="${t('Click in a field of the page first')}">
+            <option value="">${t('Fill from the vault…')}</option>
+            ${vaultItems.map(i => `${i.has_password ? `<option value="${esc(i.id)}|password">${esc(i.name)} — ${t('password')}</option>` : ''}${i.has_totp ? `<option value="${esc(i.id)}|totp">${esc(i.name)} — ${t('2FA code')}</option>` : ''}`).join('')}
+          </select>
+          ${askId ? `<button class="pixel-btn small" data-act="done">${t('Done')}</button>` : ''}
+          <button class="pixel-btn small danger" data-act="close">✕</button>
+        </div>
+        <div class="browser-live-stage">
+          <canvas class="browser-live-canvas" width="1280" height="800" tabindex="0"></canvas>
+          <textarea class="browser-live-keys" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+          <div class="browser-live-status">${t('Connecting…')}</div>
+        </div>
+        <div class="mcp-hint browser-live-hint">${t('Click in the page, then type. Your typing and pasting go to the page only; the employee never sees what you type.')}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const canvas = overlay.querySelector('canvas');
+    const ctx = canvas.getContext('2d');
+    const keys = overlay.querySelector('.browser-live-keys');
+    const urlInput = overlay.querySelector('.browser-live-url');
+    const status = overlay.querySelector('.browser-live-status');
+    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/browser/${encodeURIComponent(empId)}`);
+    const send = (msg) => { if (ws.readyState === 1) ws.send(JSON.stringify(msg)); };
+    this._browserLive = { overlay, ws, empId };
+    let frameW = 1280, frameH = 800;
+    const img = new Image();
+    img.onload = () => {
+      if (canvas.width !== frameW || canvas.height !== frameH) { canvas.width = frameW; canvas.height = frameH; }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    };
+    ws.onopen = () => { status.textContent = ''; };
+    ws.onclose = () => { status.textContent = this._t('Disconnected'); };
+    ws.onmessage = (ev) => {
+      let msg; try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === 'frame') {
+        frameW = msg.w ? Math.round(msg.w) : frameW;
+        frameH = msg.h ? Math.round(msg.h) : frameH;
+        img.src = 'data:image/jpeg;base64,' + msg.data;
+        if (msg.url && document.activeElement !== urlInput) urlInput.value = msg.url;
+        status.textContent = '';
+      } else if (msg.type === 'error') {
+        this._showToast(msg.message || 'Error', 'error', 6000);
+      } else if (msg.type === 'closed') {
+        status.textContent = this._t('The browser was closed');
+      }
+    };
+    const point = (e) => {
+      const r = canvas.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (canvas.width / r.width), y: (e.clientY - r.top) * (canvas.height / r.height) };
+    };
+    const buttonName = (b) => (b === 2 ? 'right' : b === 1 ? 'middle' : 'left');
+    let lastMove = 0;
+    canvas.addEventListener('mousedown', (e) => { e.preventDefault(); keys.focus({ preventScroll: true }); send({ type: 'mouse', event: 'down', ...point(e), button: buttonName(e.button) }); });
+    canvas.addEventListener('mouseup', (e) => { send({ type: 'mouse', event: 'up', ...point(e), button: buttonName(e.button) }); });
+    canvas.addEventListener('mousemove', (e) => {
+      const now = Date.now();
+      if (now - lastMove < 50) return;
+      lastMove = now;
+      send({ type: 'mouse', event: 'move', ...point(e) });
+    });
+    canvas.addEventListener('wheel', (e) => { e.preventDefault(); send({ type: 'mouse', event: 'wheel', ...point(e), dx: e.deltaX, dy: e.deltaY }); }, { passive: false });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    const SPECIAL = new Set(['Enter', 'Backspace', 'Tab', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+      'Home', 'End', 'PageUp', 'PageDown', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12']);
+    const MODIFIERS = { Shift: 'Shift', Control: 'Control', Meta: 'Meta', Alt: 'Alt' };
+    keys.addEventListener('keydown', (e) => {
+      const paste = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v';
+      if (paste) return;  // the textarea receives the text: sent on input
+      if (SPECIAL.has(e.key) || ((e.metaKey || e.ctrlKey) && e.key.length === 1)) {
+        e.preventDefault();
+        const mods = ['Meta', 'Control', 'Alt', 'Shift'].filter(m => e.getModifierState(m));
+        mods.forEach(m => send({ type: 'key', event: 'down', key: m }));
+        send({ type: 'key', event: 'down', key: e.key.length === 1 ? e.key.toLowerCase() : e.key });
+        send({ type: 'key', event: 'up', key: e.key.length === 1 ? e.key.toLowerCase() : e.key });
+        mods.reverse().forEach(m => send({ type: 'key', event: 'up', key: m }));
+      } else if (MODIFIERS[e.key]) {
+        e.preventDefault();
+      }
+    });
+    keys.addEventListener('input', () => {
+      if (keys.value) { send({ type: 'text', text: keys.value }); keys.value = ''; }
+    });
+    overlay.querySelector('[data-act="go"]').onclick = () => { if (urlInput.value.trim()) send({ type: 'navigate', url: urlInput.value.trim() }); };
+    urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); send({ type: 'navigate', url: urlInput.value.trim() }); keys.focus(); } });
+    overlay.querySelector('[data-act="back"]').onclick = () => send({ type: 'back' });
+    overlay.querySelector('[data-act="reload"]').onclick = () => send({ type: 'reload' });
+    overlay.querySelector('[data-act="close"]').onclick = () => this._closeBrowserLive();
+    const doneBtn = overlay.querySelector('[data-act="done"]');
+    if (doneBtn) doneBtn.onclick = async () => { if (await this._browserAskDone(empId, askId)) this._closeBrowserLive(); };
+    const fill = overlay.querySelector('.browser-live-fill');
+    fill.onchange = async () => {
+      const [itemId, field] = (fill.value || '').split('|');
+      fill.value = '';
+      if (!itemId) return;
+      const ok = await this._vaultCall(`/api/browsers/${encodeURIComponent(empId)}/fill`, 'POST', { item_id: itemId, field });
+      if (ok) this._showToast(this._t('Filled from the vault'), 'success');
+      keys.focus({ preventScroll: true });
+    };
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) this._closeBrowserLive(); });
+    setTimeout(() => keys.focus({ preventScroll: true }), 50);
+  }
+
+  _closeBrowserLive() {
+    const live = this._browserLive;
+    if (!live) return;
+    this._browserLive = null;
+    try { live.ws.close(); } catch (e) { /* already closed */ }
+    live.overlay.remove();
+    const panel = document.getElementById('access-panel');
+    if (panel && !panel.classList.contains('hidden')) this._loadBrowsers();
   }
 
   // ── Vault: logins the employees use without seeing them ────────────────

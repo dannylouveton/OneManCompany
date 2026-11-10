@@ -35,6 +35,10 @@ sandbox = [
     "opensandbox>=0.1",
     "opensandbox-code-interpreter>=0.1",
 ]
+# Employees' browsers (the DSI's): then `playwright install chromium`
+browser = [
+    "playwright>=1.49",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -923,6 +923,12 @@ def _register_coo_tools() -> None:
     for t in [*COO_ACCESS_TOOLS, *VAULT_ADMIN_TOOLS]:
         tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["COO", "DSI"]))
 
+    # The DSI's browser: pages without secrets, vault values typed for it
+    from onemancompany.agents.browser_tools import BROWSER_TOOLS
+
+    for t in BROWSER_TOOLS:
+        tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["DSI"]))
+
 
 _register_coo_tools()
 

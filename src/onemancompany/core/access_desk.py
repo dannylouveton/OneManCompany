@@ -631,6 +631,45 @@ def provide(request_id: str, key: str, *, overrides: dict | None = None, note: s
     return out, tool_id
 
 
+def provide_by_desk(request_id: str, key: str, *, setup: dict | None = None, what: str = "",
+                    by: str = "DSI") -> tuple[dict, str]:
+    """The desk created the key itself (in its browser): same outcome as the CEO pasting it.
+
+    An open request is validated for its waiting requesters with the setup the
+    desk gives (API address, how the key is sent, CLI); a request already
+    waiting for the CEO keeps its card, completed by that setup.
+    """
+    from onemancompany.core import api_tools
+
+    given = normalize_setup(setup) if setup else {}
+    given = {k: v for k, v in given.items() if not (k == "auth_in" and not setup.get("auth_in")
+                                                     and not setup.get("preset"))}
+    with _lock:
+        items = _load()
+        req = _find(items, request_id)
+        if req.get("status") not in ACTIVE:
+            raise ValueError(f"Request {request_id} is already {req.get('status')}")
+        card = req.get("card") or {}
+        merged = {**(card.get("setup") or {}), **given}
+        has_tool = bool(card.get("tool_id") and api_tools.load_tool(card["tool_id"]))
+        if not has_tool and not (merged.get("base_url") or merged.get("cli")):
+            raise ValueError("Give the API address (base_url) and/or the command-line tool (cli or a preset) so the "
+                             "key can be used through the relay")
+        if req.get("status") == "open":
+            req["card"] = {"what": (what or f"{req['service']}")[:1000], "why": "", "where_url": "", "rights": "",
+                           "deliverable": "key", "setup": merged, "tool_id": "", "allowed_writes": [],
+                           "by": by, "at": _now()}
+            for q in req["requesters"]:
+                if q.get("status") == "new":
+                    q["status"] = "validated"
+            req["status"] = "waiting_ceo"
+        else:
+            req["card"] = {**card, "deliverable": "key", "setup": merged}
+        _history(req, by, "key created by the desk", what or "")
+        _save(items)
+    return provide(request_id, key, by=by)
+
+
 def done_without_key(request_id: str, note: str = "", *, by: str = "CEO") -> dict:
     """The CEO did what was asked (account, invitation…) without a key to store."""
     with _lock:

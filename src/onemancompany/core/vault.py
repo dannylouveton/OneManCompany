@@ -342,18 +342,36 @@ def asks_for_ceo() -> list[dict]:
     return [i for i in list_items() if i.get("ask")]
 
 
+def secret_values() -> list[str]:
+    """Every value in the vault, decrypted: only for masking pages before a model sees them."""
+    with _lock:
+        items = _load()
+    values = []
+    for item in items:
+        for field, token in (item.get("values") or {}).items():
+            if token:
+                values.append(_dec(token))
+                if field == "totp":  # the code of the moment too
+                    values.append(totp_now(values[-1]))
+    return values
+
+
 # ---------------------------------------------------------------------------
 # Using a value: OneManCompany's own code only (never an employee tool)
 # ---------------------------------------------------------------------------
 
-def use(item_id: str, field: str, *, employee_id: str, purpose: str = "") -> str:
-    """The value, for OneManCompany's code acting for an employee (e.g. filling a browser field)."""
+def use(item_id: str, field: str, *, employee_id: str, purpose: str = "", keeper: bool = False) -> str:
+    """The value, for OneManCompany's code acting for an employee (e.g. filling a browser field).
+
+    ``keeper``: the DSI, who keeps the vault, may use any item (to create and
+    look after accounts); the browser still types it only on the item's site.
+    """
     if field not in FIELDS:
         raise ValueError(f"field must be one of {', '.join(FIELDS)}")
     with _lock:
         items = _load()
         item = _find(items, item_id)
-        if not can_use(item, employee_id):
+        if not keeper and not can_use(item, employee_id):
             raise PermissionError(f"{employee_id} may not use {item.get('name')!r}: ask the DSI (request_access)")
         token = (item.get("values") or {}).get(field)
         if not token:
@@ -364,8 +382,9 @@ def use(item_id: str, field: str, *, employee_id: str, purpose: str = "") -> str
     return _dec(token)
 
 
-def totp_code(item_id: str, *, employee_id: str, purpose: str = "", at: float | None = None) -> str:
-    return totp_now(use(item_id, "totp", employee_id=employee_id, purpose=purpose), at=at)
+def totp_code(item_id: str, *, employee_id: str, purpose: str = "", at: float | None = None,
+              keeper: bool = False) -> str:
+    return totp_now(use(item_id, "totp", employee_id=employee_id, purpose=purpose, keeper=keeper), at=at)
 
 
 def reveal(item_id: str, field: str, *, by: str = "CEO") -> str:

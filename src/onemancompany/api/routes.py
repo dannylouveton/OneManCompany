@@ -5674,11 +5674,13 @@ async def access_requests_list(status: str = "waiting_ceo") -> dict:
 
     from onemancompany.core import vault
 
+    from onemancompany.core import browser
+
     await access_desk.reconcile()  # tasks still waiting on a request decided elsewhere
     items = access_desk.list_requests(status)
     waiting = len(items) if status == "waiting_ceo" else len(access_desk.waiting_for_ceo())
     return {"requests": [_access_card(r) for r in items], "waiting_ceo": waiting,
-            "vault_asks": len(vault.asks_for_ceo())}
+            "vault_asks": len(vault.asks_for_ceo()), "browser_asks": len(browser.open_asks())}
 
 
 # ---------------------------------------------------------------------------
@@ -5748,6 +5750,128 @@ async def vault_reveal(item_id: str, body: dict) -> dict:
     except ValueError as exc:
         raise _vault_error(exc)
     return {"value": value}
+
+
+# ---------------------------------------------------------------------------
+# Browsers: the CEO watches and takes over an employee's browser (live view)
+# ---------------------------------------------------------------------------
+
+def _browser_error(exc: Exception) -> HTTPException:
+    from onemancompany.core.browser import mask
+
+    return HTTPException(status_code=400, detail=mask(str(exc))[:500])
+
+
+@router.get("/api/browsers")
+async def browsers_list() -> dict:
+    """The browsers the CEO can open (the DSI's, and any open one) and what is asked of the CEO in them."""
+    from onemancompany.core import access_desk, browser
+
+    opened = {b["employee_id"]: b for b in await browser.browser_service.list_open()}
+    dsi = access_desk.dsi_id()
+    people = []
+    for emp in dict.fromkeys([*([dsi] if dsi else []), *opened]):
+        info = opened.get(emp) or {}
+        people.append({"id": emp, "label": access_desk.label(emp), "open": emp in opened,
+                       "url": browser.mask(info.get("url", "")), "title": browser.mask(info.get("title", "")),
+                       "tabs": info.get("tabs", 0)})
+    asks = [{**a, "label": access_desk.label(a.get("employee_id", ""))} for a in browser.open_asks()]
+    return {"browsers": people, "asks": asks}
+
+
+@router.post("/api/browsers/{employee_id}/asks/{ask_id}/done")
+async def browser_ask_done(employee_id: str, ask_id: str, body: dict | None = None) -> dict:
+    """The CEO did the step in the browser: the employee is told and carries on. Body: {note?}."""
+    from onemancompany.core import browser
+    from onemancompany.core.i18n import get_company_language
+
+    try:
+        ask = browser.close_ask(ask_id, str((body or {}).get("note") or ""))
+    except browser.BrowserError as exc:
+        raise _browser_error(exc)
+    note = f" ({ask['note']})" if ask.get("note") else ""
+    if get_company_language() == "fr":
+        text = (f"Le CEO a fait dans ton navigateur : « {ask['what']} »{note}. Reprends où tu en étais "
+                f"(browser_snapshot pour relire la page).")
+    else:
+        text = (f"The CEO did this in your browser: \"{ask['what']}\"{note}. Carry on where you left off "
+                f"(browser_snapshot to read the page again).")
+    _push_adhoc_task(ask.get("employee_id") or employee_id, text)
+    await event_bus.publish(CompanyEvent(type=EventType.ACCESS_REQUEST_UPDATE, agent="CEO",
+                                         payload={"browser_ask": ask_id, "new_card": False}))
+    return {"status": "ok", "ask": ask}
+
+
+@router.post("/api/browsers/{employee_id}/fill")
+async def browser_ceo_fill(employee_id: str, body: dict) -> dict:
+    """The CEO types a vault value in the focused field of the browser they are watching. Body: {item_id, field?}.
+
+    Journaled like a reveal; the value goes from the vault to the page without being shown.
+    """
+    from onemancompany.core import vault
+    from onemancompany.core.browser import browser_service
+
+    try:
+        value = vault.reveal(str(body.get("item_id", "")), str(body.get("field") or "password"), by="CEO")
+        await browser_service.ceo_fill(employee_id, value)
+    except ValueError as exc:
+        raise _vault_error(exc)
+    except Exception as exc:
+        raise _browser_error(exc)
+    return {"status": "ok"}
+
+
+@router.post("/api/browsers/{employee_id}/close")
+async def browser_close(employee_id: str) -> dict:
+    from onemancompany.core.browser import browser_service
+
+    await browser_service.close(employee_id)
+    return {"status": "ok"}
+
+
+@router.websocket("/ws/browser/{employee_id}")
+async def browser_live(websocket: WebSocket, employee_id: str) -> None:
+    """Live view: frames of the page out, the CEO's mouse and keyboard in."""
+    from onemancompany.core.browser import browser_service, mask
+
+    await websocket.accept()
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=3)
+
+    def put(msg: dict) -> None:
+        if queue.full() and msg.get("type") == "frame":
+            queue.get_nowait()  # drop the oldest frame: show the latest
+        if not queue.full():
+            queue.put_nowait(msg)
+
+    def sink(msg: dict) -> None:  # called from the browser thread
+        loop.call_soon_threadsafe(put, msg)
+
+    viewer = _uuid.uuid4().hex
+    try:
+        await browser_service.watch(employee_id, viewer, sink)
+    except Exception as exc:
+        await websocket.send_json({"type": "error", "message": mask(str(exc))[:300]})
+        await websocket.close()
+        return
+
+    async def pump() -> None:
+        while True:
+            await websocket.send_json(await queue.get())
+
+    pump_task = asyncio.create_task(pump())
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            try:
+                await browser_service.send_input(employee_id, msg)
+            except Exception as exc:
+                await websocket.send_json({"type": "error", "message": mask(str(exc))[:300]})
+    except Exception as exc:  # WebSocketDisconnect when the CEO closes the view
+        logger.debug("[browser] live view of {} ended: {!r}", employee_id, exc)
+    finally:
+        pump_task.cancel()
+        await browser_service.unwatch(employee_id, viewer)
 
 
 @router.post("/api/vault/{item_id}/holders")

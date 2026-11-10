@@ -298,3 +298,25 @@ def test_thread_lines_for_an_opened_request_and_an_action_card(desk, monkeypatch
     access_desk.escalate(req["id"], what="Exporter la zone DNS", why="inventaire", deliverable="action")
     line = access_desk.thread_text("escalated", access_desk.get_request(req["id"]))
     assert "a envoyé une demande au CEO" in line and "de créer" not in line
+
+
+def test_the_desk_provides_a_key_it_created(desk, tmp_path):
+    req, _ = _scalingo_request(access="write")
+    with pytest.raises(ValueError):
+        access_desk.provide_by_desk(req["id"], KEY, setup={})  # no API address: the key could not be used
+    done, tool_id = access_desk.provide_by_desk(req["id"], KEY, setup={"preset": "scalingo"}, what="Jeton Scalingo")
+    assert done["status"] == "done" and done["resolution"]["by"] == "DSI"
+    assert api_tools.load_tool(tool_id)["allowed_users"] == ["00007"]
+    assert KEY not in (tmp_path / "tools" / tool_id / "tool.yaml").read_text()
+    with pytest.raises(ValueError):
+        access_desk.provide_by_desk(req["id"], KEY, setup={"preset": "scalingo"})  # already done
+
+    # A card the CEO already had is settled the same way, with the card's setup
+    other, _ = access_desk.submit("00006", "n8n", "lire les workflows", kind="api")
+    access_desk.escalate(other["id"], what="Une clé d'API n8n", why="workflows",
+                         setup={"base_url": "https://n8n.example.com/api/v1", "auth_name": "X-N8N-API-KEY",
+                                "auth_format": "{key}"})
+    done, tool_id = access_desk.provide_by_desk(other["id"], "n8n_api_0123456789abcdef")
+    data = api_tools.load_tool(tool_id)
+    assert done["status"] == "done" and data["allowed_users"] == ["00006"]
+    assert data["api"]["base_url"] == "https://n8n.example.com/api/v1"
