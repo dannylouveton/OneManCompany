@@ -5669,6 +5669,7 @@ async def access_requests_list(status: str = "waiting_ceo") -> dict:
     """Access requests (default: the ones waiting for the CEO)."""
     from onemancompany.core import access_desk
 
+    await access_desk.reconcile()  # tasks still waiting on a request decided elsewhere
     items = access_desk.list_requests(status)
     waiting = len(items) if status == "waiting_ceo" else len(access_desk.waiting_for_ceo())
     return {"requests": [_access_card(r) for r in items], "waiting_ceo": waiting}

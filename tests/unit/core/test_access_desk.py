@@ -194,3 +194,21 @@ def test_rpc_api_and_limited_writes(desk):
     assert api_tools.decide(data, "00007", "GET", "/sendMessage")[0] == "denied"
     assert api_tools.decide(data, "00007", "POST", "/deleteMessage")[0] == "denied"
     assert done["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_resumes_tasks_waiting_on_a_request_decided_elsewhere(desk):
+    req, _ = access_desk.submit("00007", "n8n", "exécutions en erreur")
+    access_desk.set_coo_node(req["id"], "00007", "node_coo_n8n")
+    access_desk.escalate(req["id"], what="Une clé n8n", why="x", setup={"preset": "n8n", "base_url": "https://n8n.example.com/api/v1"})
+    access_desk.refuse(req["id"], "00007", "passe par Scalingo", by="EA")  # decided outside the COO's task
+    entry = type("E", (), {"node_id": "node_coo_n8n"})()
+    manager = type("M", (), {"resume_held_task": AsyncMock(return_value=True), "_schedule": {"00003": [entry]}})()
+    with patch("onemancompany.core.vessel.employee_manager", manager):
+        assert await access_desk.reconcile() == 1
+    args = manager.resume_held_task.await_args.args
+    assert args[:2] == ("00003", "node_coo_n8n") and "passe par Scalingo" in args[2]
+    empty = type("M", (), {"resume_held_task": AsyncMock(), "_schedule": {}})()
+    with patch("onemancompany.core.vessel.employee_manager", empty):
+        assert await access_desk.reconcile() == 0
+    empty.resume_held_task.assert_not_awaited()

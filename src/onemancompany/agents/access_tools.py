@@ -282,6 +282,7 @@ async def grant_access(request_id: str, target_employee_id: str, tool_id: str, a
         from onemancompany.core.claude_session import stop_employee_daemons
 
         await stop_employee_daemons({str(target_employee_id)})
+    await access_desk.reconcile()  # decided from another task: resume the one waiting
     req = result["request"]
     entry = next(q for q in req["requesters"] if q["employee"] == str(target_employee_id))
     return {"status": "granted", "request_id": request_id, "employee": target_employee_id, "tool_id": tool_id,
@@ -389,7 +390,7 @@ def escalate_access_request(request_id: str, what_to_create: str, why: str, mini
 
 
 @tool
-def refuse_access(request_id: str, target_employee_id: str, reason: str, employee_id: str = "") -> dict:
+async def refuse_access(request_id: str, target_employee_id: str, reason: str, employee_id: str = "") -> dict:
     """Refuse an access request for one employee, with the reason they will read.
 
     Args:
@@ -404,6 +405,7 @@ def refuse_access(request_id: str, target_employee_id: str, reason: str, employe
         req = access_desk.refuse(request_id, target_employee_id, reason, by=_actor(employee_id))
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
+    await access_desk.reconcile()  # decided from another task: resume the one waiting
     entry = next(q for q in req["requesters"] if q["employee"] == str(target_employee_id))
     return {"status": "refused", "for_the_employee": access_desk.outcome_text(req, entry),
             "message": "Refused. Finish your task with the 'for_the_employee' line as your result."}

@@ -95,6 +95,7 @@ async def test_coo_grants_an_existing_connector_and_restarts_sessions(desk, monk
                                                       "mcp": {"command": "node"}, "allowed_users": ["00006"]}))
     req, _ = access_desk.submit("00007", "Photonet", "lire les commandes")
     stop = AsyncMock(return_value=1)
+    monkeypatch.setattr(access_desk, "reconcile", AsyncMock(return_value=0))
     with patch("onemancompany.core.claude_session.stop_employee_daemons", stop):
         out = await access_tools.grant_access.ainvoke({
             "request_id": req["id"], "target_employee_id": "00007", "tool_id": "photonet", "employee_id": "00003"})
@@ -105,9 +106,11 @@ async def test_coo_grants_an_existing_connector_and_restarts_sessions(desk, monk
     stop.assert_awaited_once()
 
 
-def test_coo_refuses(desk):
+@pytest.mark.asyncio
+async def test_coo_refuses(desk, monkeypatch):
+    monkeypatch.setattr(access_desk, "reconcile", AsyncMock(return_value=0))
     req, _ = access_desk.submit("00007", "Stripe", "rembourser", access="write")
-    out = access_tools.refuse_access.invoke({"request_id": req["id"], "target_employee_id": "00007",
+    out = await access_tools.refuse_access.ainvoke({"request_id": req["id"], "target_employee_id": "00007",
                                              "reason": "le support s'en charge", "employee_id": "00003"})
     assert out["status"] == "refused" and "le support s'en charge" in out["for_the_employee"]
     listed = access_tools.list_access_requests.invoke({"status": "all"})

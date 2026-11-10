@@ -618,6 +618,36 @@ async def notify_requesters(req: dict, employees: list[str] | None = None) -> li
     return told
 
 
+async def reconcile() -> int:
+    """Resume COO tasks still waiting on a request that was decided elsewhere.
+
+    E.g. the executive assistant refused it after talking with the CEO, or the
+    COO granted it from another task. Only waiting (HOLDING) COO tasks are
+    touched; returns how many were resumed.
+    """
+    from onemancompany.core.config import COO_ID
+    from onemancompany.core.vessel import employee_manager
+
+    scheduled = {e.node_id for e in employee_manager._schedule.get(COO_ID, [])}
+    if not scheduled:
+        return 0
+    resumed = 0
+    with _lock:
+        items = [copy.deepcopy(r) for r in _load()]
+    for req in items:
+        for entry in req.get("requesters") or []:
+            node = entry.get("coo_node") or ""
+            if node in scheduled and entry.get("status") in ("granted", "refused"):
+                try:
+                    if await employee_manager.resume_held_task(COO_ID, node, outcome_text(req, entry)):
+                        resumed += 1
+                        logger.info("[access-desk] resumed COO task {} ({} for {})", node, req["service"],
+                                    entry.get("employee"))
+                except Exception as exc:
+                    logger.warning("[access-desk] cannot resume COO task {}: {}", node, exc)
+    return resumed
+
+
 def _node_running(node_id: str) -> bool:
     """True if the COO is still working on that node (it may wait once its turn ends)."""
     from onemancompany.core.config import COO_ID

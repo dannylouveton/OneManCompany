@@ -25,6 +25,7 @@ def desk(tmp_path, monkeypatch):
     monkeypatch.setattr("onemancompany.agents.coo_agent._load_assets_from_disk", lambda: None)
     notify = AsyncMock(return_value=["00007"])
     monkeypatch.setattr(access_desk, "notify_requesters", notify)
+    monkeypatch.setattr(access_desk, "reconcile", AsyncMock(return_value=0))
     req, _ = access_desk.submit("00007", "GitHub", "lire la CI", kind="cli")
     access_desk.escalate(req["id"], what="Un jeton GitHub (lecture)", why="CI d'id_picture",
                          rights="Contents, Actions : lecture", setup={"preset": "github"})
