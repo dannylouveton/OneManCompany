@@ -17,7 +17,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 
 from onemancompany.agents.base import BaseAgentRunner, extract_final_content, make_llm
-from onemancompany.core.config import COO_ID, HR_ID, MAX_SUMMARY_LEN, OrgDir, PF_DEPARTMENT, PF_NAME, PF_REMOTE, PF_ROLE, PROJECTS_DIR, ROOMS_DIR, STATUS_IDLE, STATUS_WORKING, TOOL_YAML_FILENAME, TOOLS_DIR, WORKFLOWS_DIR, load_assets, open_utf, read_text_utf, save_company_direction, save_workflow, slugify_tool_name
+from onemancompany.core.config import COO_ID, HR_ID, MAX_SUMMARY_LEN, OrgDir, PF_DEPARTMENT, PF_LEVEL, PF_NAME, PF_REMOTE, PF_ROLE, PROJECTS_DIR, ROOMS_DIR, STATUS_IDLE, STATUS_WORKING, TOOL_YAML_FILENAME, TOOLS_DIR, WORKFLOWS_DIR, load_assets, open_utf, read_text_utf, save_company_direction, save_workflow, slugify_tool_name
 from onemancompany.core.events import CompanyEvent, event_bus
 from onemancompany.core.workflow_engine import WorkflowValidationError
 from onemancompany.core.models import EventType
@@ -753,6 +753,23 @@ def deposit_company_knowledge(
     }
 
 
+def _refresh_principles_header(employee_id: str, department: str, role: str, level: int) -> None:
+    """Keep the department/title lines of work_principles.md in line with the profile."""
+    import re
+
+    from onemancompany.core.config import EMPLOYEES_DIR
+    from onemancompany.core.state import make_title
+
+    path = EMPLOYEES_DIR / employee_id / "work_principles.md"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    updated = re.sub(r"(?m)^\*\*Department\*\*: .*$", lambda _m: f"**Department**: {department}", text)
+    updated = re.sub(r"(?m)^\*\*Title\*\*: .*$", lambda _m: f"**Title**: {make_title(level, role)}", updated)
+    if updated != text:
+        path.write_text(updated, encoding="utf-8")
+
+
 @tool
 async def assign_department(target_employee_id: str, department: str, role: str = "") -> dict:
     """Assign or change an employee's department and role.
@@ -823,6 +840,8 @@ async def assign_department(target_employee_id: str, department: str, role: str 
             ROLE_DEPARTMENT_MAP[role] = department
 
     await _store.save_employee(target_employee_id, updates)
+    _refresh_principles_header(target_employee_id, department if not no_dept_change else old_dept,
+                               role or old_role, emp_data.get(PF_LEVEL, 1))
 
     # Recompute office layout if department changed
     if not no_dept_change:

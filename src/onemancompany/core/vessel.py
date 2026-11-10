@@ -2512,6 +2512,12 @@ class EmployeeManager:
                 "## SOPs & Workflows (use read() for full content)\n"
                 + "\n".join(sop_lines)
             )
+            # The onboarding charter is how everyone here works: injected in
+            # full for every employee (founding executives have role guides).
+            from onemancompany.core.config import FOUNDING_IDS
+            charter = (workflows.get("onboarding_charter") or "").strip()
+            if charter and employee_id not in FOUNDING_IDS:
+                parts.append(charter)
 
         # 3. CEO guidance (1-on-1 notes)
         notes = _store.load_employee_guidance(employee_id)

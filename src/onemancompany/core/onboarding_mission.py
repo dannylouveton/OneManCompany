@@ -2,8 +2,8 @@
 
 At hire (or on demand for someone already on the team):
 
-* the **onboarding charter** (company rule ``onboarding_charter``) is added to
-  the employee's work principles, which are injected into every task;
+* the **onboarding charter** (company rule ``onboarding_charter``) is how
+  everyone here works: it is injected for every employee, not copied;
 * an **arrival note** (company rule ``onboarding_mission``) wakes them up:
   nothing is assigned; like a top performer, they decide how to take up the
   role, act, and report up the hierarchy (report_up);
@@ -14,7 +14,6 @@ Both texts live with the company rules, so the CEO can read and edit them.
 config.yaml::
 
     onboarding:
-      charter: true    # default
       mission: true    # default
       weekly: false    # default: the employee sets up their own round
 """
@@ -49,8 +48,7 @@ def _settings() -> dict:
     cfg = load_app_config().get("onboarding")
     cfg = cfg if isinstance(cfg, dict) else {}
     # The weekly round is the employee's own initiative (set_cron), not imposed.
-    return {"charter": cfg.get("charter", True) is not False,
-            "mission": cfg.get("mission", True) is not False,
+    return {"mission": cfg.get("mission", True) is not False,
             "weekly": cfg.get("weekly", False) is True}
 
 
@@ -66,24 +64,22 @@ def _doc(name: str) -> str:
     return (load_workflows().get(name) or "").strip()
 
 
-def apply_charter(employee_id: str) -> bool:
-    """Add (or refresh) the charter in the employee's work principles."""
+def remove_charter(employee_id: str) -> bool:
+    """Remove a charter copy from the employee's work principles (older versions copied it).
+
+    The charter is a company rule now, injected for every employee.
+    """
     from onemancompany.core.config import EMPLOYEES_DIR
 
-    charter = _doc(CHARTER_DOC)
-    if not charter:
-        return False
     path = EMPLOYEES_DIR / employee_id / "work_principles.md"
-    current = path.read_text(encoding="utf-8") if path.exists() else ""
-    block = f"{_START}\n{charter}\n{_END}"
-    if _START in current and _END in current:
-        updated = re.sub(re.escape(_START) + r".*?" + re.escape(_END), lambda _m: block, current, flags=re.S)
-    else:
-        updated = (current.rstrip() + "\n\n" if current.strip() else "") + block + "\n"
+    if not path.exists():
+        return False
+    current = path.read_text(encoding="utf-8")
+    updated = re.sub(r"\n*" + re.escape(_START) + r".*?" + re.escape(_END) + r"\n?", "\n", current, flags=re.S)
     if updated != current:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(updated, encoding="utf-8")
-    return True
+        path.write_text(updated.rstrip() + "\n", encoding="utf-8")
+        return True
+    return False
 
 
 def render_mission(template: str, values: dict[str, str]) -> str:
@@ -127,11 +123,10 @@ def start_weekly(employee_id: str) -> dict:
 
 async def onboard(employee_id: str, hire_context: str = "", *, force: bool = False) -> dict:
     """Charter + mission + weekly round, as configured. Never raises."""
-    settings = {**_settings(), "charter": True, "mission": True} if force else _settings()
+    settings = {**_settings(), "mission": True} if force else _settings()
     result: dict = {"employee_id": employee_id}
     try:
-        if settings["charter"]:
-            result["charter"] = apply_charter(employee_id)
+        result["charter"] = "company rule"  # injected for everyone, see vessel
         if settings["mission"]:
             result["mission"] = await launch_mission(employee_id, hire_context)
         if settings["weekly"]:
