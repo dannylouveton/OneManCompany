@@ -93,3 +93,33 @@ def test_validation(store):
     with pytest.raises(ValueError):
         vault.grant("nope", "00007", by="DSI")
     assert vault.new_password(4).__len__() == 12 and not set(vault.new_password(30, symbols=False)) & set("!#$%&*+-=?@_")
+
+
+def test_a_read_only_placeholder_does_not_block_the_vault(tmp_path, monkeypatch):
+    """The agents' sandbox leaves an empty read-only file where a hidden file is missing."""
+    import stat
+
+    from onemancompany.core import config as config_mod
+    from onemancompany.core import vault
+
+    monkeypatch.setattr(config_mod, "COMPANY_DIR", tmp_path)
+    store = {}
+
+    class Store:
+        def get(self, name):
+            return store.get(name)
+
+        def set_many(self, values):
+            store.update(values)
+
+    monkeypatch.setattr("onemancompany.core.secret_store.get_secret_store", lambda: Store())
+    placeholder = tmp_path / "vault.json"
+    placeholder.write_text("")
+    placeholder.chmod(0o444)
+    assert vault.ensure_file() == placeholder and placeholder.read_text() == "[]"
+    placeholder.chmod(0o444)  # read-only again: saving still works
+    item = vault.create_item("OVH — admin", by="CEO", password="p4ss-w0rd!")
+    assert vault.reveal(item["id"], "password") == "p4ss-w0rd!"
+    assert stat.S_IMODE(placeholder.stat().st_mode) == 0o600
+    vault.ensure_file()  # a vault with items is left alone
+    assert vault.get_item(item["id"])

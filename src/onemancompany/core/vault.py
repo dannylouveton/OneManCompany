@@ -20,6 +20,7 @@ import copy
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import string
 import struct
@@ -91,13 +92,30 @@ def _load() -> list[dict]:
 
 
 def _save(items: list[dict]) -> None:
+    """Write a new file and swap it in: also replaces a read-only placeholder (see ensure_file)."""
     path = vault_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
-        path.chmod(0o600)
+        tmp.chmod(0o600)
     except OSError as exc:  # pragma: no cover - non-POSIX filesystems
-        logger.warning("[vault] cannot restrict permissions of {}: {}", path, exc)
+        logger.warning("[vault] cannot restrict permissions of {}: {}", tmp, exc)
+    os.replace(tmp, path)
+
+
+def ensure_file() -> Path:
+    """Create the (empty) vault if there is none yet.
+
+    The agents' sandbox hides the vault: when the file does not exist, it puts
+    an empty read-only file in its place, which then cannot be written. Called
+    before any session starts, so the real file is always there first.
+    """
+    path = vault_path()
+    with _lock:
+        if not path.exists() or (path.stat().st_size == 0 and not _load()):
+            _save([])
+    return path
 
 
 def _find(items: list[dict], item_id: str) -> dict:

@@ -128,9 +128,13 @@ def test_agent_sandbox_settings(tmp_path, monkeypatch):
     from onemancompany.core import claude_session
 
     monkeypatch.setattr(config_mod, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(config_mod, "COMPANY_DIR", tmp_path / "company")
     monkeypatch.setattr(config_mod, "load_app_config", lambda: {})
     s = claude_session.agent_sandbox_settings()
     env = str(tmp_path / ".env")
+    vault_file = tmp_path / "company" / "vault.json"  # exists before any session: no placeholder in its place
+    assert vault_file.read_text() == "[]" and str(vault_file) in s["sandbox"]["filesystem"]["denyRead"]
+    assert (tmp_path / "company" / "browsers").is_dir()
     assert s["sandbox"]["enabled"] and s["sandbox"]["allowUnsandboxedCommands"] is False
     assert env in s["sandbox"]["filesystem"]["denyRead"]
     assert str(tmp_path) in s["sandbox"]["filesystem"]["allowWrite"]

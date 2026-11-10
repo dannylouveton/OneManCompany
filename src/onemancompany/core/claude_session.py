@@ -338,14 +338,20 @@ def agent_sandbox_settings() -> dict | None:
     read_dirs = [d for d in expand(cfg.get("read_dirs")) if d not in work_dirs]
 
     from onemancompany.core.browser import browsers_dir
-    from onemancompany.core.vault import vault_path
+    from onemancompany.core.vault import ensure_file as ensure_vault_file
 
+    # Denied paths must exist first: for a missing one the sandbox leaves an
+    # empty read-only file in its place, and the vault could no longer be saved.
     browsers = browsers_dir()  # browser profiles: cookies and sessions of every employee
     try:
         browsers.mkdir(parents=True, exist_ok=True)  # a folder: its contents are denied too
+        vault_file = ensure_vault_file()
     except OSError as exc:
-        logger.warning("[sandbox] cannot create {}: {}", browsers, exc)
-    secrets = [str(DATA_ROOT / DOT_ENV_FILENAME), str(SOURCE_ROOT / DOT_ENV_FILENAME), str(vault_path()),
+        logger.warning("[sandbox] cannot prepare {} or the vault: {}", browsers, exc)
+        from onemancompany.core.vault import vault_path as vault_file_path
+
+        vault_file = vault_file_path()
+    secrets = [str(DATA_ROOT / DOT_ENV_FILENAME), str(SOURCE_ROOT / DOT_ENV_FILENAME), str(vault_file),
                str(browsers)]
     secrets += [str(home / p[2:]) for p in _SANDBOX_DENY_READ_HOME]
     secrets += [str(p) for p in expand(cfg.get("deny_read"))]
