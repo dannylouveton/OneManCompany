@@ -88,6 +88,32 @@ def site_of(url_or_host: str) -> str:
     return ".".join(parts[-2:])
 
 
+def _control_host() -> str:
+    import os
+
+    return (urlparse(os.environ.get("OMC_CONTROL_URL") or "").hostname or "").lower()
+
+
+def is_private(url: str) -> bool:
+    """OneManCompany itself, the machine and the local network: closed to employees' browsers.
+
+    A browser on the server could otherwise reach OneManCompany's own pages
+    (and approve its own requests) or the CEO's local network.
+    """
+    import ipaddress
+
+    host = (urlparse(str(url or "")).hostname or "").lower().strip("[]")
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local") or host == _control_host():
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_unspecified
+
+
 _BAD_SCHEMES = re.compile(r"^\s*(javascript|data|file|about|chrome|blob|vbscript|view-source|ftp):", re.I)
 
 
@@ -332,7 +358,8 @@ class _Session:
 class BrowserService:
     """One Playwright, one profile per employee, driven from any event loop."""
 
-    def __init__(self) -> None:
+    def __init__(self, block_private: bool = True) -> None:
+        self._block_private = block_private
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._start = threading.Lock()
@@ -385,6 +412,11 @@ class BrowserService:
                 locale="fr-FR" if get_company_language() == "fr" else "en-US")
         except Exception as exc:
             raise BrowserError(f"The browser could not start: {exc}") from exc
+        if self._block_private:  # every request: pages, frames, scripts, fetch
+            async def block(route) -> None:
+                await route.abort("blockedbyclient")
+
+            await context.route(lambda url: is_private(url), block)
         page = context.pages[0] if context.pages else await context.new_page()
         s = _Session(employee_id, context, page, asyncio.Lock())
         self._sessions[employee_id] = s
@@ -446,11 +478,18 @@ class BrowserService:
 
     # -- what agents do ----------------------------------------------------
 
+    def _target(self, url: str) -> str:
+        url = normalize_url(url)
+        if self._block_private and is_private(url):
+            raise BrowserError("OneManCompany's own pages, this machine and the local network are closed to "
+                               "employees' browsers")
+        return url
+
     async def _open_impl(self, emp: str, url: str) -> str:
         s = await self._session(emp)
         async with s.lock:
             try:
-                await s.page.goto(normalize_url(url), wait_until="domcontentloaded", timeout=30000)
+                await s.page.goto(self._target(url), wait_until="domcontentloaded", timeout=30000)
             except BrowserError:
                 raise
             except Exception as exc:
@@ -658,7 +697,7 @@ class BrowserService:
         elif kind == "text":
             await page.keyboard.insert_text(str(msg.get("text") or ""))
         elif kind == "navigate":
-            await page.goto(normalize_url(str(msg.get("url") or "")), wait_until="domcontentloaded", timeout=30000)
+            await page.goto(self._target(str(msg.get("url") or "")), wait_until="domcontentloaded", timeout=30000)
         elif kind == "back":
             await page.go_back(timeout=30000)
         elif kind == "reload":

@@ -34,6 +34,30 @@ def test_only_web_pages_open():
             browser.normalize_url(bad)
 
 
+def test_onemancompany_and_the_local_network_are_closed(monkeypatch):
+    monkeypatch.setenv("OMC_CONTROL_URL", "http://omc.internal:8000")
+    for url in ("http://localhost:8000/api/vault", "http://127.0.0.1:5678", "http://[::1]/", "http://0.0.0.0:8000",
+                "http://192.168.1.1/admin", "http://10.0.0.5", "http://169.254.169.254/latest/meta-data",
+                "http://nas.local/", "http://omc.internal:8000/"):
+        assert browser.is_private(url), url
+    for url in ("https://console.scaleway.com", "https://8.8.8.8/", "https://www.ovh.com/manager"):
+        assert not browser.is_private(url), url
+
+
+@pytest.mark.asyncio
+async def test_a_page_of_this_machine_does_not_open(chromium, site, tmp_path, monkeypatch):
+    monkeypatch.setattr(config_mod, "COMPANY_DIR", tmp_path)
+    monkeypatch.setattr(browser, "_vault_values", lambda: [])
+    svc = browser.BrowserService()
+    try:
+        with pytest.raises(browser.BrowserError, match="closed to employees' browsers"):
+            await svc.open("00009", f"{site}/login")
+        with pytest.raises(browser.BrowserError):
+            await svc.send_input("00009", {"type": "navigate", "url": "http://localhost:8000/"})
+    finally:
+        await svc.close("00009")
+
+
 def test_masking_hides_secrets_and_keeps_ids(monkeypatch):
     monkeypatch.setattr(browser, "_vault_values", lambda: [SECRET])
     text = (f"pass {SECRET} encoded Tr0ub4dor%263-xyz%21 key sk-live_AbCdEfGh1234567890XyZ "
@@ -135,7 +159,7 @@ def chromium():
 async def test_a_real_page_without_a_secret(chromium, site, tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "COMPANY_DIR", tmp_path)
     monkeypatch.setattr(browser, "_vault_values", lambda: [SECRET])
-    svc = browser.BrowserService()
+    svc = browser.BrowserService(block_private=False)  # the test site is on this machine
     try:
         page = await svc.open("00009", f"{site}/login")
         assert "Title: Connexion" in page and "# Connexion" in page
