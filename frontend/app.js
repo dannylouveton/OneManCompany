@@ -2278,6 +2278,13 @@ class AppController {
     if (!messagesContainer) return;
 
     this._ceoTerm = new CeoTerminal(messagesContainer);
+    // Clicking an answer on a question card sends it like a typed CEO message.
+    this._ceoTerm.onAnswer = (answer) => {
+      const box = document.getElementById('ceo-conv-input');
+      if (!box || !this._ceoDoSend) return;
+      box.value = answer;
+      this._ceoDoSend();
+    };
 
     // Wire Chat button — switches to EA default chat
     document.getElementById('ceo-chat-btn')?.addEventListener('click', () => {
@@ -2465,6 +2472,7 @@ class AppController {
 
       input?.focus();
     };
+    this._ceoDoSend = doSend;
 
     input?.addEventListener('keydown', (e) => {
       const slashMenu = document.getElementById('ceo-slash-menu');

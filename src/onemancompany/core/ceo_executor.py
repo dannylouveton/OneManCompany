@@ -60,7 +60,9 @@ class CeoExecutor:
             tree_path="",
             project_id=project_id,
             source_employee=context.employee_id,
-            interaction_type="ceo_request",
+            # Multiple-choice questions (ask_ceo) are for the CEO only:
+            # the EA never auto-answers them.
+            interaction_type="ceo_question" if "```omc-questions" in clean_message else "ceo_request",
             message=clean_message,
             future=future,
         )

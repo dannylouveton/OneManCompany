@@ -397,7 +397,7 @@ class ConversationService:
         When CEO DND mode is on, auto-reply triggers immediately (0s timeout).
         Credential requests never auto-reply — must wait for CEO.
         """
-        if interaction.interaction_type == "credential_request":
+        if interaction.interaction_type in ("credential_request", "ceo_question"):
             return
         from onemancompany.core.config import get_ceo_dnd
         timeout = 0 if get_ceo_dnd() else AUTO_REPLY_TIMEOUT

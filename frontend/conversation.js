@@ -114,9 +114,10 @@ class ChatPanel {
 
     renderMessages(messages) {
         this._messagesEl.innerHTML = '';
-        for (const msg of messages) {
-            this._appendMessageEl(msg);
-        }
+        messages.forEach((msg, i) => {
+            const answered = messages.slice(i + 1).some((m) => m.sender === 'ceo');
+            this._appendMessageEl(msg, answered);
+        });
         this._messagesEl.scrollTop = this._messagesEl.scrollHeight;
         this.showTyping(false);
     }
@@ -130,9 +131,23 @@ class ChatPanel {
         }
     }
 
-    _appendMessageEl(msg) {
+    _appendMessageEl(msg, answered = false) {
         const div = document.createElement('div');
         const isCeo = msg.sender === 'ceo';
+        const asked = !isCeo && window.OmcQuestions ? OmcQuestions.extract(msg.text || '') : null;
+        if (asked) {
+            // Multiple-choice questions from the agent (ask_ceo): clickable card.
+            div.className = 'chat-msg chat-msg-agent chat-msg-questions';
+            div.innerHTML = `
+                <div class="chat-msg-role">${this._escapeHtml(msg.role)}</div>
+                ${asked.text ? `<div class="chat-msg-text">${this._escapeHtml(asked.text)}</div>` : ''}`;
+            div.appendChild(OmcQuestions.render(asked.questions, (answer) => {
+                this._inputEl.value = answer;
+                this._handleSend();
+            }, answered));
+            this._messagesEl.appendChild(div);
+            return;
+        }
         const attachmentHtml = (msg.attachments || [])
             .map(a => this._renderAttachment(a))
             .join('');

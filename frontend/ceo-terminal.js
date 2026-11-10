@@ -53,10 +53,12 @@ class CeoTerminal {
     this._addDivider();
 
     if (this._history.length) {
-      for (const msg of this._history) {
-        this._renderMsg(msg);
+      this._history.forEach((msg, i) => {
+        // A question card is answered once the CEO has spoken after it.
+        const answered = this._history.slice(i + 1).some((m) => m.role === 'ceo');
+        this._renderMsg(msg, answered);
         this._addDivider();
-      }
+      });
     } else {
       const empty = document.createElement('div');
       empty.style.color = '#71717a';
@@ -190,8 +192,21 @@ class CeoTerminal {
     this._scrollToBottom();
   }
 
-  _renderMsg(msg) {
+  _renderMsg(msg, answered = false) {
     const el = document.createElement('div');
+    const asked = msg.role !== 'ceo' && window.OmcQuestions ? OmcQuestions.extract(msg.text || '') : null;
+    if (asked) {
+      // Multiple-choice questions from an agent (ask_ceo): clickable card.
+      const src = msg.source || 'system';
+      el.className = 'ceo-msg ceo-msg--agent ceo-msg--questions';
+      el.innerHTML = `<span class="ceo-msg-sender">[${this._esc(src)}]</span>`
+        + (asked.text ? `<span class="ceo-msg-text">${this._esc(asked.text)}</span>` : '');
+      el.appendChild(OmcQuestions.render(asked.questions, (answer) => {
+        if (this.onAnswer) this.onAnswer(answer);
+      }, answered));
+      this._container.appendChild(el);
+      return;
+    }
 
     if (msg.role === 'ceo') {
       el.className = 'ceo-msg ceo-msg--ceo';

@@ -1458,6 +1458,123 @@ async def report_to_ceo(message: str, employee_id: str = "") -> dict:
     return {"status": "ok", "channel": conv.type, "conv_id": conv.id}
 
 
+# ---------------------------------------------------------------------------
+# Multiple-choice questions to the CEO (like "Ask questions" in Claude)
+# ---------------------------------------------------------------------------
+
+QUESTIONS_FENCE = "omc-questions"
+MAX_QUESTIONS = 4
+
+
+def _normalize_questions(questions) -> list[dict]:
+    """Validate and clean questions; raise ValueError with a helpful message."""
+    import json as _json
+
+    if isinstance(questions, str):
+        try:
+            questions = _json.loads(questions)
+        except ValueError as exc:
+            raise ValueError("questions must be a list of question objects") from exc
+    if isinstance(questions, dict):
+        questions = [questions]
+    if not isinstance(questions, list) or not 1 <= len(questions) <= MAX_QUESTIONS:
+        raise ValueError(f"Ask between 1 and {MAX_QUESTIONS} questions at once")
+    out = []
+    for i, q in enumerate(questions, 1):
+        if not isinstance(q, dict) or not str(q.get("question", "")).strip():
+            raise ValueError(f"Question {i}: 'question' text is required")
+        options = q.get("options") or []
+        if not isinstance(options, list) or not 2 <= len(options) <= 4:
+            raise ValueError(f"Question {i}: give 2 to 4 options (the CEO can always write another answer)")
+        clean_opts = []
+        for opt in options:
+            if isinstance(opt, str):
+                opt = {"label": opt}
+            label = str((opt or {}).get("label", "")).strip()
+            if not label:
+                raise ValueError(f"Question {i}: every option needs a label")
+            clean_opts.append({
+                "label": label[:80],
+                "description": str(opt.get("description", "")).strip()[:200],
+                "recommended": bool(opt.get("recommended")),
+            })
+        out.append({
+            "question": str(q["question"]).strip()[:500],
+            "header": str(q.get("header", "")).strip()[:24],
+            "multi_select": bool(q.get("multi_select")),
+            "options": clean_opts,
+        })
+    return out
+
+
+def format_ceo_questions(questions: list[dict], context: str = "") -> str:
+    """Readable text + a machine block the UI turns into clickable choices."""
+    import json as _json
+
+    lines = [context.strip(), ""] if context.strip() else []
+    for i, q in enumerate(questions, 1):
+        lines.append(f"{i}. {q['question']}")
+        for opt in q["options"]:
+            star = " (recommended)" if opt["recommended"] else ""
+            desc = f" — {opt['description']}" if opt["description"] else ""
+            lines.append(f"   - {opt['label']}{star}{desc}")
+    payload = _json.dumps({"questions": questions}, ensure_ascii=False)
+    return "\n".join(lines).strip() + f"\n\n```{QUESTIONS_FENCE}\n{payload}\n```"
+
+
+@tool
+async def ask_ceo(questions: list[dict] | str, context: str = "", employee_id: str = "") -> dict:
+    """Ask the CEO 1-4 multiple-choice questions; they answer with one click.
+
+    Use this whenever you need a decision, a preference or a missing fact from
+    the CEO, instead of writing an open question. Each question offers 2-4
+    concrete options; the CEO can always pick "Other" and write their own
+    answer. Put your recommended option first and mark it "recommended".
+
+    Inside a task: the task waits for the answer, then you are resumed with
+    it (shown as [CEO REPLY]). Finish your turn right after calling this tool
+    — do not guess the answer. Outside a task: the answer arrives as the
+    CEO's next message.
+
+    Args:
+        questions: List of {"question": str, "header": short label (≤ 24 chars),
+            "multi_select": bool, "options": [{"label": str, "description": str,
+            "recommended": bool}]}.
+        context: Optional one or two sentences explaining why you ask.
+        employee_id: Your employee ID (auto-filled).
+    """
+    if err := _validate_employee_id(employee_id):
+        return err
+    try:
+        clean = _normalize_questions(questions)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    text = format_ceo_questions(clean, context)
+
+    from onemancompany.agents.tree_tools import _find_entry_for_task, dispatch_child
+    from onemancompany.core.config import CEO_ID
+    from onemancompany.core.vessel import _current_task_id
+
+    task_id = _current_task_id.get()
+    if task_id and _find_entry_for_task(task_id)[0]:
+        title = clean[0]["header"] or clean[0]["question"][:40]
+        result = dispatch_child.invoke({
+            "target_employee_id": CEO_ID,
+            "description": text,
+            "acceptance_criteria": ["The CEO answered the questions"],
+            "title": f"Question: {title}",
+        })
+        if result.get("status") == "error":
+            return result
+        return {"status": "asked", "request_node": result.get("node_id", ""),
+                "message": "Questions sent to the CEO. End your turn now: you will be "
+                           "resumed with the answer as [CEO REPLY]."}
+
+    sent = await report_to_ceo.ainvoke({"message": text, "employee_id": employee_id})
+    return {"status": "asked", "channel": sent.get("channel"),
+            "message": "Questions sent to the CEO. Their answer will arrive as their next message."}
+
+
 def _credential_env_key(service_name: str) -> str:
     """Convert service name to env var key: 'stripe' -> 'STRIPE_API_KEY'."""
     import re
@@ -1881,7 +1998,7 @@ def _register_all_internal_tools() -> None:
         # Formerly gated — now available to all employees
         bash, use_tool, set_project_budget,
         set_cron, stop_cron_job, setup_webhook, remove_webhook,
-        list_automations, notify_ceo, report_to_ceo,
+        list_automations, notify_ceo, report_to_ceo, ask_ceo,
         start_background_task, check_background_task, stop_background_task,
         list_background_tasks, request_api_key,
     ]

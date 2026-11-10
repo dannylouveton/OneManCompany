@@ -18,6 +18,14 @@
   const DICTS = {
     fr: {
       "Actions": "Actions",
+      "My answers:": "Mes réponses :",
+      "(no answer)": "(pas de réponse)",
+      "Several choices possible": "Plusieurs choix possibles",
+      "One choice": "Un seul choix",
+      "Recommended": "Recommandé",
+      "Other answer or note (optional)": "Autre réponse ou précision (facultatif)",
+      "Answered": "Répondu",
+      "Send answers": "Envoyer mes réponses",
       "Connect an MCP connector or an API key and choose which employees can use it": "Connectez un connecteur MCP ou une clé API et choisissez quels employés peuvent l'utiliser",
       "API key": "Clé API",
       "Employees never receive the key. They ask the server to make the call; it checks your rules, adds the key and returns the answer. Writes can wait for your approval": "Les employés ne reçoivent jamais la clé. Ils demandent au serveur de faire l'appel : il vérifie vos règles, ajoute la clé et renvoie la réponse. Les écritures peuvent attendre votre validation",
