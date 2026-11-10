@@ -7606,7 +7606,7 @@ class AppController {
         if (msg.url && document.activeElement !== urlInput) urlInput.value = msg.url;
         status.textContent = '';
       } else if (msg.type === 'error') {
-        this._showToast(msg.message || 'Error', 'error', 6000);
+        this._showToast(this._t(msg.message || 'Error'), 'error', 6000);
       } else if (msg.type === 'closed') {
         status.textContent = this._t('The browser was closed');
       }

@@ -80,6 +80,8 @@
       "Filled from the vault": "Rempli depuis le coffre",
       "A browser is waiting for you": "Un navigateur vous attend",
       "See": "Voir",
+      "OneManCompany's own pages, this machine and the local network are closed to employees' browsers": "Les pages de OneManCompany, cette machine et le réseau local sont fermés aux navigateurs des employés",
+      "Only http and https pages can be opened": "Seules les pages http et https peuvent s'ouvrir",
       "Username": "Identifiant",
       "The vault is waiting for you": "Le coffre attend une valeur de vous",
       "Open the vault": "Ouvrir le coffre",
