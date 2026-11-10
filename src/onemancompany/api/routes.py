@@ -5669,10 +5669,110 @@ async def access_requests_list(status: str = "waiting_ceo") -> dict:
     """Access requests (default: the ones waiting for the CEO)."""
     from onemancompany.core import access_desk
 
+    from onemancompany.core import vault
+
     await access_desk.reconcile()  # tasks still waiting on a request decided elsewhere
     items = access_desk.list_requests(status)
     waiting = len(items) if status == "waiting_ceo" else len(access_desk.waiting_for_ceo())
-    return {"requests": [_access_card(r) for r in items], "waiting_ceo": waiting}
+    return {"requests": [_access_card(r) for r in items], "waiting_ceo": waiting,
+            "vault_asks": len(vault.asks_for_ceo())}
+
+
+# ---------------------------------------------------------------------------
+# The company vault, seen by the CEO (values only on demand, journaled)
+# ---------------------------------------------------------------------------
+
+def _vault_error(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=404 if "Unknown vault item" in str(exc) else 400, detail=str(exc))
+
+
+@router.get("/api/vault")
+async def vault_items() -> dict:
+    from onemancompany.core import access_desk, vault
+    from onemancompany.core.store import load_all_employees
+
+    items = vault.list_items(history=15)
+    people = [{"id": eid, "label": access_desk.label(eid)} for eid in sorted(load_all_employees() or {}) if eid != CEO_ID]
+    return {"items": items, "asks": sum(1 for i in items if i.get("ask")), "employees": people,
+            "keeper": access_desk.label(access_desk.desk_owner_id())}
+
+
+@router.post("/api/vault")
+async def vault_add(body: dict) -> dict:
+    """The CEO adds a login. Body: {name, service?, url?, username?, password?, totp?, note?, holders?, generate?}."""
+    from onemancompany.core import vault
+
+    try:
+        item = vault.create_item(str(body.get("name", "")), service=str(body.get("service", "")),
+                                 url=str(body.get("url", "")), username=str(body.get("username", "")),
+                                 holders=body.get("holders") or [], by="CEO", password=str(body.get("password") or ""),
+                                 totp=str(body.get("totp") or ""), note=str(body.get("note") or ""),
+                                 generate_password=bool(body.get("generate")))
+    except ValueError as exc:
+        raise _vault_error(exc)
+    return {"status": "ok", "item": item}
+
+
+@router.post("/api/vault/{item_id}/secret")
+async def vault_set_secret(item_id: str, body: dict) -> dict:
+    """The CEO types a value (e.g. answering a request of the DSI). Body: {field, value}."""
+    from onemancompany.core import vault
+
+    before = vault.get_item(item_id) or {}
+    try:
+        item = vault.set_secret(item_id, str(body.get("field") or "password"), str(body.get("value") or ""), by="CEO")
+    except ValueError as exc:
+        raise _vault_error(exc)
+    ask = before.get("ask") or {}
+    if ask.get("asker") and not item.get("ask"):
+        from onemancompany.core.i18n import get_company_language
+
+        fr = get_company_language() == "fr"
+        _push_adhoc_task(ask["asker"], (f"Le CEO a rempli « {item['name']} » ({ask.get('field')}) dans le coffre. "
+                                        "Reprends ce qui en dépendait." if fr else
+                                        f"The CEO filled \"{item['name']}\" ({ask.get('field')}) in the vault. "
+                                        "Carry on with what depended on it."))
+    return {"status": "ok", "item": item}
+
+
+@router.post("/api/vault/{item_id}/reveal")
+async def vault_reveal(item_id: str, body: dict) -> dict:
+    """Show a value to the CEO (for 2FA: the current code). Journaled. Body: {field}."""
+    from onemancompany.core import vault
+
+    try:
+        value = vault.reveal(item_id, str(body.get("field") or "password"), by="CEO")
+    except ValueError as exc:
+        raise _vault_error(exc)
+    return {"value": value}
+
+
+@router.post("/api/vault/{item_id}/holders")
+async def vault_holders(item_id: str, body: dict) -> dict:
+    """The CEO changes who may use an item. Body: {grant?: [ids], revoke?: [ids], reason?}."""
+    from onemancompany.core import vault
+
+    reason = str(body.get("reason") or "")
+    try:
+        for emp in body.get("grant") or []:
+            vault.grant(item_id, str(emp), by="CEO", reason=reason)
+        for emp in body.get("revoke") or []:
+            vault.revoke(item_id, str(emp), by="CEO", reason=reason)
+        item = vault.get_item(item_id)
+    except ValueError as exc:
+        raise _vault_error(exc)
+    return {"status": "ok", "item": item}
+
+
+@router.delete("/api/vault/{item_id}")
+async def vault_delete(item_id: str) -> dict:
+    from onemancompany.core import vault
+
+    try:
+        vault.delete_item(item_id, by="CEO")
+    except ValueError as exc:
+        raise _vault_error(exc)
+    return {"status": "ok"}
 
 
 @router.post("/api/access-requests/open")

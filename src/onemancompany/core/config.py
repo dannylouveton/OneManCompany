@@ -943,6 +943,7 @@ def load_assets() -> tuple[dict, dict]:
 
 
 HR_SOP_DIR = HR_DIR / "sops"
+ROLE_GUIDES_DIR = HR_DIR / "role_guides"  # <role>.md: the guide of every employee holding that role
 
 
 def load_workflows() -> dict[str, str]:

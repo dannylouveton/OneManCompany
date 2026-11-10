@@ -7202,3 +7202,23 @@ button:disabled, [aria-disabled="true"] {
 #tool-list-body .api-request-who { margin: 3px 0 0 10px; font-size: 12px; }
 #tool-list-body .mcp-footer + .tool-section { margin-top: 14px; }
 #tool-list-body .api-history-row { grid-template-columns: 110px 110px 1fr auto; word-break: normal; overflow-wrap: anywhere; }
+
+
+/* ── Access box tabs and the vault ─────────────────────────────────────── */
+#access-panel .hidden { display: none !important; }
+.access-tabs { display: flex; gap: 4px; flex: 1; margin-left: 8px; }
+.access-tab { background: transparent; border: 1px solid var(--border, #444); color: inherit; padding: 2px 10px;
+  font: inherit; font-size: 12px; cursor: pointer; border-radius: 3px; opacity: 0.7; }
+.access-tab.active { opacity: 1; background: var(--panel-hover, rgba(255,255,255,0.08)); }
+.vault-intro { font-size: 12px; margin-bottom: 8px; line-height: 1.4; }
+.vault-intro .mcp-hint { display: block; margin-top: 4px; }
+.vault-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px;
+  padding: 6px 8px; margin-bottom: 8px; border: 1px dashed var(--accent, #e0a040); border-radius: 4px; }
+.vault-card.vault-asking { border-color: var(--accent, #e0a040); }
+.vault-ask { margin: 6px 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.vault-ask input, .vault-reveal code { font-family: monospace; }
+.vault-reveal { display: flex; align-items: center; gap: 8px; margin: 6px 0; word-break: break-all; }
+.vault-reveal code { padding: 3px 6px; background: rgba(0,0,0,0.25); border-radius: 3px; user-select: all; }
+.vault-people { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; font-size: 12px; max-height: 160px; overflow-y: auto; }
+.vault-people label, .vault-generate { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.vault-holders { margin-top: 6px; }

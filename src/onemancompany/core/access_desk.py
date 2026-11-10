@@ -225,6 +225,59 @@ def matching_tools(service: str) -> list[dict]:
 # Employee side
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Who runs the desk: the DSI once the company has one, otherwise the COO
+# ---------------------------------------------------------------------------
+
+DSI_ROLE = "DSI"
+_DSI_NAMES = ("dsi", "cio", "chief information officer", "directeur des systèmes d'information",
+              "directrice des systèmes d'information", "directeur des systemes d'information",
+              "directrice des systemes d'information", "it director")
+
+
+def is_dsi_role(role: str) -> bool:
+    role = " ".join(str(role or "").lower().replace("’", "'").split())
+    return role in _DSI_NAMES or role.startswith(("dsi ", "dsi (", "cio ", "cio ("))
+
+
+def dsi_id() -> str:
+    """The company's DSI (head of IT and access), or "" if there is none yet."""
+    from onemancompany.core.store import load_all_employees
+
+    try:
+        employees = load_all_employees() or {}
+    except Exception:  # pragma: no cover - never break the desk on a store error
+        return ""
+    return next((str(eid) for eid, data in sorted(employees.items()) if is_dsi_role((data or {}).get("role", ""))), "")
+
+
+def desk_owner_id() -> str:
+    from onemancompany.core.config import COO_ID
+
+    return dsi_id() or COO_ID
+
+
+def _desk_owners() -> list[str]:
+    from onemancompany.core.config import COO_ID
+
+    return list(dict.fromkeys([desk_owner_id(), COO_ID]))
+
+
+def _node_owner(entry: dict) -> str:
+    """Who holds the desk task of this requester (the COO before the DSI arrived, then the DSI)."""
+    from onemancompany.core.task_tree import get_tree
+
+    tree_path, node_id = entry.get("tree_path") or "", entry.get("coo_node") or ""
+    if tree_path and node_id and Path(tree_path).exists():
+        node = get_tree(tree_path).get_node(node_id)
+        if node is not None and node.employee_id:
+            return str(node.employee_id)
+    for owner in _desk_owners():
+        if _node_running(node_id, owner):
+            return owner
+    return desk_owner_id()
+
+
 def _clean_access(access: str) -> str:
     return "write" if str(access or "").strip().lower() in ("write", "w", "rw", "écriture", "ecriture", "read-write") else "read"
 
@@ -659,7 +712,7 @@ def outcome_text(req: dict, entry: dict) -> str:
 
 
 async def _resume_later(coo_id: str, node_id: str, text: str, employee_id: str, attempts: int = 40) -> None:
-    """The COO's task may still be running when the CEO answers: retry until it waits."""
+    """The desk task (COO or DSI) may still be running when the CEO answers: retry until it waits."""
     from onemancompany.core.vessel import employee_manager
 
     for _ in range(attempts):
@@ -676,8 +729,7 @@ async def _resume_later(coo_id: str, node_id: str, text: str, employee_id: str, 
 
 
 async def notify_requesters(req: dict, employees: list[str] | None = None) -> list[str]:
-    """Resume the COO's waiting tasks (so the requesters continue) or tell them directly."""
-    from onemancompany.core.config import COO_ID
+    """Resume the desk's waiting tasks (so the requesters continue) or tell them directly."""
     from onemancompany.core.vessel import employee_manager
 
     told = []
@@ -692,12 +744,13 @@ async def notify_requesters(req: dict, employees: list[str] | None = None) -> li
         node = entry.get("coo_node") or ""
         resumed = False
         if node:
+            owner = _node_owner(entry)
             try:
-                resumed = await employee_manager.resume_held_task(COO_ID, node, text)
+                resumed = await employee_manager.resume_held_task(owner, node, text)
             except Exception as exc:
-                logger.warning("[access-desk] cannot resume COO task {}: {}", node, exc)
-            if not resumed and _node_running(node):
-                asyncio.get_running_loop().create_task(_resume_later(COO_ID, node, text, emp))
+                logger.warning("[access-desk] cannot resume desk task {}: {}", node, exc)
+            if not resumed and _node_running(node, owner):
+                asyncio.get_running_loop().create_task(_resume_later(owner, node, text, emp))
                 told.append(emp)
                 continue
         if not resumed:
@@ -716,10 +769,9 @@ async def reconcile() -> int:
     COO granted it from another task. Only waiting (HOLDING) COO tasks are
     touched; returns how many were resumed.
     """
-    from onemancompany.core.config import COO_ID
     from onemancompany.core.vessel import employee_manager
 
-    scheduled = {e.node_id for e in employee_manager._schedule.get(COO_ID, [])}
+    scheduled = {e.node_id: owner for owner in _desk_owners() for e in employee_manager._schedule.get(owner, [])}
     resumed = 0
     with _lock:
         items = [copy.deepcopy(r) for r in _load()]
@@ -730,7 +782,7 @@ async def reconcile() -> int:
             node = entry.get("coo_node") or ""
             if node in scheduled:
                 try:
-                    if await employee_manager.resume_held_task(COO_ID, node, outcome_text(req, entry)):
+                    if await employee_manager.resume_held_task(scheduled[node], node, outcome_text(req, entry)):
                         resumed += 1
                         await post_to_thread(entry.get("project_id", ""), entry["employee"],
                                              "🔑 " + outcome_text(req, entry))
@@ -764,15 +816,17 @@ def _resume_left_waiting(req: dict, entry: dict) -> bool:
     return done
 
 
-def _node_running(node_id: str) -> bool:
-    """True if the COO is still working on that node (it may wait once its turn ends)."""
-    from onemancompany.core.config import COO_ID
+def _node_running(node_id: str, owner: str = "") -> bool:
+    """True if the desk (COO or DSI) is still working on that node (it may wait once its turn ends)."""
     from onemancompany.core.vessel import employee_manager
 
-    current = employee_manager._current_entries.get(COO_ID)
-    if current is not None and current.node_id == node_id:
-        return True
-    return any(e.node_id == node_id for e in employee_manager._schedule.get(COO_ID, []))
+    for who in ([owner] if owner else _desk_owners()):
+        current = employee_manager._current_entries.get(who)
+        if current is not None and current.node_id == node_id:
+            return True
+        if any(e.node_id == node_id for e in employee_manager._schedule.get(who, [])):
+            return True
+    return False
 
 
 def _publish(req: dict, new_card: bool = False) -> None:

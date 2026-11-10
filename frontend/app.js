@@ -1230,7 +1230,9 @@ class AppController {
       accessBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         accessPanel.classList.toggle('hidden');
-        if (!accessPanel.classList.contains('hidden')) this._loadAccessRequests();
+        if (!accessPanel.classList.contains('hidden')) {
+          this._accessTab(accessPanel.querySelector('.access-tab.active')?.dataset.tab || 'requests');
+        }
       });
       document.addEventListener('click', (e) => {
         if (!accessPanel.contains(e.target) && !accessBtn.contains(e.target)) accessPanel.classList.add('hidden');
@@ -7441,8 +7443,15 @@ class AppController {
   async _refreshAccessBadge() {
     try {
       const data = await fetch('/api/access-requests?status=waiting_ceo').then(r => r.json());
-      this._setAccessBadge(data.waiting_ceo || 0);
+      this._setAccessBadge((data.waiting_ceo || 0) + (data.vault_asks || 0));
     } catch (e) { /* offline: keep the last count */ }
+  }
+
+  _accessTab(tab) {
+    document.querySelectorAll('#access-panel .access-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+    document.getElementById('access-list')?.classList.toggle('hidden', tab !== 'requests');
+    document.getElementById('vault-list')?.classList.toggle('hidden', tab !== 'vault');
+    if (tab === 'vault') this._loadVault(); else this._loadAccessRequests();
   }
 
   async _loadAccessRequests() {
@@ -7456,11 +7465,163 @@ class AppController {
       list.innerHTML = `<div class="access-empty">${esc(this._t('Could not load the requests'))}</div>`;
       return;
     }
-    this._setAccessBadge(data.waiting_ceo || 0);
+    this._setAccessBadge((data.waiting_ceo || 0) + (data.vault_asks || 0));
     const items = data.requests || [];
-    list.innerHTML = items.length
+    const vaultHint = data.vault_asks
+      ? `<div class="vault-hint">${esc(this._t('The vault is waiting for you'))} (${data.vault_asks}) <button class="pixel-btn small" onclick="window.app._accessTab('vault')">${esc(this._t('Open the vault'))}</button></div>`
+      : '';
+    list.innerHTML = vaultHint + (items.length
       ? items.map(r => this._renderAccessCard(r, esc)).join('')
-      : `<div class="access-empty">${esc(this._t('Nothing for you: the COO handles the requests and only sends you what needs a key or an account.'))}</div>`;
+      : `<div class="access-empty">${esc(this._t('Nothing for you: the COO handles the requests and only sends you what needs a key or an account.'))}</div>`);
+  }
+
+  // ── Vault: logins the employees use without seeing them ────────────────
+
+  async _loadVault() {
+    const box = document.getElementById('vault-list');
+    if (!box) return;
+    const esc = (v) => this._escapeHtml(v == null ? '' : String(v));
+    const t = (s) => esc(this._t(s));
+    let data;
+    try {
+      data = await fetch('/api/vault').then(r => r.json());
+    } catch (e) {
+      box.innerHTML = `<div class="access-empty">${t('Could not load the vault')}</div>`;
+      return;
+    }
+    this._vaultPeople = data.employees || [];
+    const people = (selected) => `<div class="vault-people">
+        <label><input type="checkbox" value="*" ${selected.includes('*') ? 'checked' : ''}> ${t('The whole company')}</label>
+        ${this._vaultPeople.map(p => `<label><input type="checkbox" value="${esc(p.id)}" ${selected.includes(p.id) ? 'checked' : ''}> ${esc(p.label)}</label>`).join('')}
+      </div>`;
+    const items = data.items || [];
+    const card = (i) => `
+      <div class="access-card vault-card ${i.ask && i.ask.field ? 'vault-asking' : ''}" data-vault-id="${esc(i.id)}">
+        <div class="access-head">
+          <span class="access-service">${esc(i.name)}</span>
+          <span class="perm-tag">${[i.has_password ? t('password') : '', i.has_totp ? t('2FA') : '', i.has_note ? t('note') : ''].filter(Boolean).join(' · ') || t('empty')}</span>
+        </div>
+        ${i.username ? `<div class="access-row"><span class="access-label">${t('Username')}</span><span class="access-text">${esc(i.username)}</span></div>` : ''}
+        ${i.url ? `<a class="mcp-link" href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.service || i.url)} →</a>` : (i.service ? `<div class="mcp-hint">${esc(i.service)}</div>` : '')}
+        <div class="access-row"><span class="access-label">${t('Used by')}</span><span class="access-text">${esc((i.holder_labels || []).join(', ') || this._t('nobody yet'))}</span></div>
+        ${i.ask && i.ask.field ? `
+          <div class="vault-ask">
+            <div><b>${esc(i.ask.by)}</b> ${t('asks you')} : ${esc(i.ask.what)}</div>
+            <input type="password" class="vault-answer" autocomplete="new-password" placeholder="${t(i.ask.field === 'totp' ? '2FA secret or otpauth:// link' : 'Type the value here')}">
+            <button class="pixel-btn small" onclick="window.app._vaultAnswer('${esc(i.id)}', '${esc(i.ask.field)}')">${t('Save in the vault')}</button>
+          </div>` : ''}
+        <div class="vault-reveal hidden"></div>
+        <div class="access-actions">
+          ${i.has_password ? `<button class="pixel-btn small secondary" onclick="window.app._vaultReveal('${esc(i.id)}', 'password')">${t('Show the password')}</button>` : ''}
+          ${i.has_totp ? `<button class="pixel-btn small secondary" onclick="window.app._vaultReveal('${esc(i.id)}', 'totp')">${t('2FA code')}</button>` : ''}
+          ${i.has_note ? `<button class="pixel-btn small secondary" onclick="window.app._vaultReveal('${esc(i.id)}', 'note')">${t('Note')}</button>` : ''}
+          <button class="pixel-btn small secondary" onclick="this.closest('.vault-card').querySelector('.vault-holders').classList.toggle('hidden')">${t('Who can use it')}</button>
+          <button class="pixel-btn small danger" onclick="window.app._vaultDelete('${esc(i.id)}')">${t('Delete')}</button>
+        </div>
+        <div class="vault-holders hidden">${people(i.holders || [])}
+          <button class="pixel-btn small" onclick="window.app._vaultSaveHolders('${esc(i.id)}')">${t('Save')}</button></div>
+        <details class="access-tech"><summary>${t('History')}</summary>
+          ${(i.history || []).slice().reverse().map(h => `<div class="api-history-row">${esc((h.at || '').replace('T', ' ').slice(0, 16))} · ${esc(h.by)} · ${t(h.event)}${h.detail ? ' — ' + esc(h.detail) : ''}</div>`).join('') || '—'}
+        </details>
+      </div>`;
+    box.innerHTML = `
+      <div class="vault-intro">${t('Logins of the company. Employees use them without ever seeing them; only you can show a value here.')}
+        ${data.keeper ? `<span class="mcp-hint">${t('Kept by')} ${esc(data.keeper)}</span>` : ''}</div>
+      <button class="pixel-btn small mcp-add-btn" onclick="document.getElementById('vault-add').classList.toggle('hidden')">+ ${t('Add a login')}</button>
+      <div id="vault-add" class="access-card hidden">
+        <label class="mcp-field">${t('Name')}<input type="text" data-v="name" placeholder="OVH — admin"></label>
+        <label class="mcp-field">${t('Service')}<input type="text" data-v="service"></label>
+        <label class="mcp-field">${t('Sign-in page')}<input type="text" data-v="url" placeholder="https://"></label>
+        <label class="mcp-field">${t('Username')}<input type="text" data-v="username"></label>
+        <label class="mcp-field">${t('Password')}<input type="password" data-v="password" autocomplete="new-password"></label>
+        <label class="vault-generate"><input type="checkbox" data-v="generate"> ${t('Generate a strong password instead')}</label>
+        <label class="mcp-field">${t('2FA secret (optional)')}<input type="password" data-v="totp" autocomplete="off" placeholder="${t('2FA secret or otpauth:// link')}"></label>
+        ${people([])}
+        <button class="pixel-btn small" onclick="window.app._vaultAdd()">${t('Add to the vault')}</button>
+      </div>
+      ${items.length ? items.map(card).join('') : `<div class="access-empty">${t('The vault is empty')}</div>`}`;
+  }
+
+  async _vaultCall(url, method, body) {
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      this._showToast(`${this._t('Error')}: ${data.detail || res.status}`, 'error', 7000);
+      return null;
+    }
+    return data;
+  }
+
+  _vaultCard(id) {
+    return document.querySelector(`.vault-card[data-vault-id="${CSS.escape(id)}"]`);
+  }
+
+  async _vaultAdd() {
+    const form = document.getElementById('vault-add');
+    const v = (k) => form.querySelector(`[data-v="${k}"]`);
+    const body = {
+      name: v('name').value.trim(), service: v('service').value.trim(), url: v('url').value.trim(),
+      username: v('username').value.trim(), password: v('password').value, totp: v('totp').value.trim(),
+      generate: v('generate').checked,
+      holders: [...form.querySelectorAll('.vault-people input:checked')].map(c => c.value),
+    };
+    if (!body.name) { this._showToast(this._t('Give it a name'), 'error'); return; }
+    if (!(await this._vaultCall('/api/vault', 'POST', body))) return;
+    this._showToast(this._t('Added to the vault'), 'success');
+    this._loadVault();
+  }
+
+  async _vaultReveal(id, field) {
+    const data = await this._vaultCall(`/api/vault/${encodeURIComponent(id)}/reveal`, 'POST', { field });
+    if (!data) return;
+    const zone = this._vaultCard(id)?.querySelector('.vault-reveal');
+    if (!zone) return;
+    zone.textContent = '';
+    const code = document.createElement('code');
+    code.textContent = data.value;
+    const copy = document.createElement('button');
+    copy.className = 'pixel-btn small secondary';
+    copy.textContent = this._t('Copy');
+    copy.onclick = () => navigator.clipboard?.writeText(data.value).then(() => this._showToast(this._t('Copied'), 'success'));
+    zone.append(code, copy);
+    zone.classList.remove('hidden');
+    clearTimeout(zone._hide);
+    zone._hide = setTimeout(() => { zone.textContent = ''; zone.classList.add('hidden'); }, 30000);
+  }
+
+  async _vaultAnswer(id, field) {
+    const input = this._vaultCard(id)?.querySelector('.vault-answer');
+    const value = input?.value || '';
+    if (!value.trim()) { this._showToast(this._t('Type the value first'), 'error'); return; }
+    if (!(await this._vaultCall(`/api/vault/${encodeURIComponent(id)}/secret`, 'POST', { field, value }))) return;
+    input.value = '';
+    this._showToast(this._t('Saved in the vault'), 'success');
+    this._loadVault();
+    this._refreshAccessBadge();
+  }
+
+  async _vaultSaveHolders(id) {
+    const card = this._vaultCard(id);
+    const checked = [...card.querySelectorAll('.vault-holders input:checked')].map(c => c.value);
+    const before = [...card.querySelectorAll('.vault-holders input')].filter(c => c.defaultChecked).map(c => c.value);
+    const body = { grant: checked.filter(x => !before.includes(x)), revoke: before.filter(x => !checked.includes(x)) };
+    if (!(await this._vaultCall(`/api/vault/${encodeURIComponent(id)}/holders`, 'POST', body))) return;
+    this._showToast(this._t('Saved'), 'success');
+    this._loadVault();
+  }
+
+  async _vaultDelete(id) {
+    const card = this._vaultCard(id);
+    const btn = card?.querySelector('.pixel-btn.danger');
+    if (btn && !btn.dataset.confirm) {
+      btn.dataset.confirm = '1';
+      btn.textContent = this._t('Click again to delete');
+      setTimeout(() => { if (btn) { delete btn.dataset.confirm; btn.textContent = this._t('Delete'); } }, 4000);
+      return;
+    }
+    if (!(await this._vaultCall(`/api/vault/${encodeURIComponent(id)}`, 'DELETE'))) return;
+    this._showToast(this._t('Deleted from the vault'), 'success');
+    this._loadVault();
   }
 
   _renderAccessCard(r, esc) {

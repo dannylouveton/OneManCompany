@@ -172,6 +172,8 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
     from onemancompany.core import access_desk
     from onemancompany.core.config import CEO_ID, COO_ID, EA_ID
 
+    desk = access_desk.desk_owner_id()
+
     if err := _validate_employee_id(employee_id):
         return err
     access = access_desk._clean_access(access)
@@ -197,7 +199,7 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
         return {"status": "error", "message": str(exc)}
     entry = next(q for q in req["requesters"] if q["employee"] == str(employee_id))
 
-    if str(employee_id) in (COO_ID, EA_ID, CEO_ID):
+    if str(employee_id) in (desk, COO_ID, EA_ID, CEO_ID):
         return {"status": "recorded", "request_id": req["id"],
                 "message": "Recorded. You run the access desk: grant it (grant_access) or ask the CEO "
                            "(escalate_access_request) yourself."}
@@ -208,7 +210,7 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
         from onemancompany.agents.tree_tools import dispatch_child
 
         result = dispatch_child.invoke({
-            "target_employee_id": COO_ID,
+            "target_employee_id": desk,
             "description": brief,
             "acceptance_criteria": ["Access granted, provided by the CEO, or refused with a reason"],
             "title": title,
@@ -216,16 +218,16 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
         if result.get("status") in ("dispatched", "dispatched_waiting") and result.get("node_id"):
             access_desk.set_coo_node(req["id"], employee_id, result["node_id"])
             await access_desk.post_to_thread(project_id, employee_id, access_desk.thread_text("requested", req, entry))
-            return {"status": "requested", "request_id": req["id"], "to": COO_ID,
-                    "message": "Sent to the COO, in this project. End your turn now: this same task comes back "
+            return {"status": "requested", "request_id": req["id"], "to": desk,
+                    "message": "Sent to the access desk, in this project. End your turn now: this same task comes back "
                                "to you with the decision, and you carry on from where you stopped."}
         logger.warning("[access] dispatch to COO failed ({}), sending as a separate task", result.get("message"))
 
     from onemancompany.api.routes import _push_adhoc_task
 
-    _push_adhoc_task(COO_ID, brief)
-    return {"status": "requested", "request_id": req["id"], "to": COO_ID,
-            "message": "Sent to the COO. The decision will come to you as a new task; carry on with what you can."}
+    _push_adhoc_task(desk, brief)
+    return {"status": "requested", "request_id": req["id"], "to": desk,
+            "message": "Sent to the access desk. The decision will come to you as a new task; carry on with what you can."}
 
 
 # ---------------------------------------------------------------------------
@@ -253,22 +255,23 @@ def _latest_project_task(employee_id: str):
 def _add_desk_task(tree_path: str, parent, brief: str, title: str) -> str:
     """The COO's access task, under the employee's task in its project tree."""
     from onemancompany.agents.tree_tools import _add_to_project_team
-    from onemancompany.core.config import COO_ID
+    from onemancompany.core.access_desk import desk_owner_id
     from onemancompany.core.task_tree import get_tree, get_tree_lock, save_tree_async
     from onemancompany.core.vessel import employee_manager
 
+    desk = desk_owner_id()
     project_dir = parent.project_dir or str(Path(tree_path).parent)
     with get_tree_lock(tree_path):
         tree = get_tree(tree_path)
-        child = tree.add_child(parent_id=parent.id, employee_id=COO_ID, description=brief,
+        child = tree.add_child(parent_id=parent.id, employee_id=desk, description=brief,
                                acceptance_criteria=["Access granted, provided by the CEO, or refused with a reason"],
                                title=title)
         child.project_id = parent.project_id
         child.project_dir = project_dir
     save_tree_async(tree_path)
-    _add_to_project_team(project_dir, COO_ID)
-    employee_manager.schedule_node(COO_ID, child.id, tree_path)
-    employee_manager._schedule_next(COO_ID)
+    _add_to_project_team(project_dir, desk)
+    employee_manager.schedule_node(desk, child.id, tree_path)
+    employee_manager._schedule_next(desk)
     return child.id
 
 
@@ -281,7 +284,6 @@ async def open_for_employee(employee_id: str, service: str, reason: str, *, acce
     access task there, and the decision goes back to the employee.
     """
     from onemancompany.core import access_desk
-    from onemancompany.core.config import COO_ID
     from onemancompany.core.store import load_employee
 
     emp = str(employee_id or "").strip()
@@ -325,7 +327,7 @@ async def open_for_employee(employee_id: str, service: str, reason: str, *, acce
 
     from onemancompany.api.routes import _push_adhoc_task
 
-    _push_adhoc_task(COO_ID, brief)
+    _push_adhoc_task(access_desk.desk_owner_id(), brief)
     return {"status": "opened", "request_id": req["id"],
             "message": "Opened at the access desk: the COO handles it as a separate task."}
 
@@ -372,9 +374,14 @@ def _brief(req: dict) -> dict:
 
 
 def _actor(employee_id: str) -> str:
+    from onemancompany.core.access_desk import dsi_id
     from onemancompany.core.config import COO_ID, EA_ID
 
-    return {COO_ID: "COO", EA_ID: "EA"}.get(str(employee_id), str(employee_id) or "COO")
+    actors = {COO_ID: "COO", EA_ID: "EA"}
+    dsi = dsi_id()
+    if dsi:
+        actors[dsi] = "DSI"
+    return actors.get(str(employee_id), str(employee_id) or "COO")
 
 
 @tool

@@ -285,6 +285,14 @@ def build_role_identity(employee_id: str) -> str:
         return read_text_utf(guide_path)
 
     profile = load_employee_profile_yaml(employee_id)
+    # Then the guide of the role (e.g. role_guides/DSI.md), shared by everyone holding it
+    from onemancompany.core.access_desk import DSI_ROLE, is_dsi_role
+    from onemancompany.core.config import ROLE_GUIDES_DIR
+    role_name = DSI_ROLE if is_dsi_role(profile.get(PF_ROLE, "")) else str(profile.get(PF_ROLE, ""))
+    role_guide = ROLE_GUIDES_DIR / f"{role_name}.md" if role_name and "/" not in role_name else None
+    if role_guide is not None and role_guide.exists():
+        who = profile.get(PF_NICKNAME, "") or profile.get(PF_NAME, "")
+        return f"## Who You Are — Identity\nYou are {who}, {role_name}.\n\n" + read_text_utf(role_guide)
     name = profile.get(PF_NAME, "Employee")
     nickname = profile.get(PF_NICKNAME, "")
     role = profile.get(PF_ROLE, "Employee")

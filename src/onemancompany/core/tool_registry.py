@@ -126,7 +126,11 @@ class ToolRegistry:
         if category == "role":
             if meta.allowed_roles is None:
                 return True
-            return emp_data.get("role", "") in meta.allowed_roles
+            role = emp_data.get("role", "")
+            if role in meta.allowed_roles:
+                return True
+            from onemancompany.core.access_desk import DSI_ROLE, is_dsi_role
+            return DSI_ROLE in meta.allowed_roles and is_dsi_role(role)
 
         if category == "asset":
             # Company-provided asset tools: available to all employees

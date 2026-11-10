@@ -847,6 +847,11 @@ async def assign_department(target_employee_id: str, department: str, role: str 
         ))
         updates.update({"department": department, "desk_position": desk_pos, "tool_permissions": new_tool_perms})
 
+    from onemancompany.core.access_desk import DSI_ROLE, is_dsi_role
+
+    if role and is_dsi_role(role):
+        role = DSI_ROLE  # one spelling: the access desk and the vault tools follow it
+        no_role_change = old_role == role
     if role and not no_role_change:
         updates["role"] = role
         # Register custom role if needed
@@ -911,11 +916,12 @@ def _register_coo_tools() -> None:
     ]:
         tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["COO"]))
 
-    # Access desk: the COO grants, escalates to the CEO or refuses
+    # Access desk and vault: run by the DSI, or by the COO until the company has one
     from onemancompany.agents.access_tools import COO_ACCESS_TOOLS
+    from onemancompany.agents.vault_tools import VAULT_ADMIN_TOOLS
 
-    for t in COO_ACCESS_TOOLS:
-        tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["COO"]))
+    for t in [*COO_ACCESS_TOOLS, *VAULT_ADMIN_TOOLS]:
+        tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["COO", "DSI"]))
 
 
 _register_coo_tools()

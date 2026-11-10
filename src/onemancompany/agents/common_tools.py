@@ -1475,6 +1475,9 @@ def manager_of(employee_id: str) -> str:
     if employee_id in (HR_ID, COO_ID, CSO_ID):
         return EA_ID
     emp = load_employee(employee_id) or {}
+    from onemancompany.core.access_desk import is_dsi_role
+    if is_dsi_role(emp.get("role", "")):
+        return EA_ID
     area = f"{emp.get('department', '')} {emp.get('role', '')}".lower()
     if area.strip() in ("hr", "rh") or any(w in area for w in _HR_WORDS):
         return HR_ID
