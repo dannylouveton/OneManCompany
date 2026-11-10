@@ -1,6 +1,7 @@
 """Secret store (dotenv backend) and secret stripping for employee sessions."""
 from __future__ import annotations
 
+import json
 import os
 import stat
 
@@ -43,6 +44,8 @@ async def test_session_env_strips_secrets(monkeypatch, tmp_path):
     cmd, env, cwd = await claude_session.prepare_session(spec)
     assert not {"MY_SECRET", "OMC_INTERNAL_KEY", "OMC_RUNNER_TOKEN", "ANTHROPIC_API_KEY"} & set(env)
     assert cmd[0] == "claude" and "--session-id" in cmd and cwd.endswith("00006")
+    settings = json.loads(cmd[cmd.index("--settings") + 1])
+    assert settings["autoMemoryDirectory"].endswith("00006/memory")
 
 
 def test_caller_signature(tmp_path, monkeypatch):

@@ -488,9 +488,14 @@ async def prepare_session(spec: SessionSpec) -> tuple[list[str], dict[str, str],
                     spec.employee_id, spec.plugins)
     else:
         cmd += ["--setting-sources", "project,local"]
-    sandbox = agent_sandbox_settings()
-    if sandbox:
-        cmd += ["--settings", json.dumps(sandbox)]
+    settings = agent_sandbox_settings() or {}
+    # Each employee's durable memory (Claude Code auto memory) lives in their
+    # own folder: writable inside the sandbox, kept with the company data,
+    # and not shared with other employees or the CEO's own ~/.claude.
+    memory_dir = EMPLOYEES_DIR / spec.employee_id / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    settings["autoMemoryDirectory"] = str(memory_dir)
+    cmd += ["--settings", json.dumps(settings)]
     cmd += ["--session-id", spec.session_id] if spec.is_new else ["--resume", spec.session_id]
 
     # Claude CLI uses its own auth (OAuth login or CLAUDE_CODE_OAUTH_TOKEN),
