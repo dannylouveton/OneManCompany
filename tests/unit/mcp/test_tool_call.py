@@ -149,3 +149,41 @@ async def test_caller_identity_overrides_employee_id_in_args():
     tool_registry.register(test_whoami, ToolMeta(name="test_whoami", category="base"))
     result = await execute_tool("00004", "test_whoami", {"employee_id": "00006"})
     assert result.get("caller") == "00004" or "00004" in str(result)
+
+
+@pytest.mark.asyncio
+async def test_current_task_wins_over_stale_task_id(monkeypatch):
+    """A long-lived session sends the task id it started with; use the running one."""
+    from types import SimpleNamespace
+
+    from onemancompany.core import vessel
+
+    seen = {}
+
+    async def fake_execute(emp, name, args):
+        seen["task"] = vessel._current_task_id.get()
+        return {"ok": True}
+
+    monkeypatch.setattr("onemancompany.core.tool_registry.execute_tool", fake_execute)
+    monkeypatch.setattr("onemancompany.api.routes.execute_tool", fake_execute, raising=False)
+    monkeypatch.setitem(vessel.employee_manager._current_entries, "00004", SimpleNamespace(node_id="new-task"))
+    app = _make_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/api/internal/tool-call", json={
+            "employee_id": "00004", "task_id": "old-task", "tool_name": "x", "args": {}})
+    assert resp.status_code == 200 and seen["task"] == "new-task"
+
+
+def test_hire_context_matches_batch_project(monkeypatch):
+    from onemancompany.agents import recruitment
+    from onemancompany.api import routes
+
+    monkeypatch.setattr(routes, "_pending_coo_hire_queue", [
+        {"role": "Agent de support", "project_id": "aaa/iter_001"},
+        {"role": "Agent de support", "project_id": "bbb/iter_001"},
+        {"role": "Lead DevOps", "project_id": "ccc/iter_001"},
+    ])
+    monkeypatch.setitem(recruitment._pending_project_ctx, "batch-1", {"project_id": "ccc/iter_001"})
+    assert routes._take_coo_hire_ctx("batch-1")["role"] == "Lead DevOps"
+    # No project known: the most recent request, never the oldest stale one
+    assert routes._take_coo_hire_ctx("unknown")["project_id"] == "bbb/iter_001"

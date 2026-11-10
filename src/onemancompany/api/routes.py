@@ -4220,6 +4220,26 @@ async def list_hiring_requests() -> list[dict]:
 # department, hire_id, and project info for role override and HOLDING resume.
 _pending_coo_hire_queue: list[dict] = []
 
+
+def _take_coo_hire_ctx(batch_id: str) -> dict:
+    """Pop the hiring context that belongs to this candidate batch.
+
+    Contexts are matched by project (the batch remembers which project's
+    recruitment produced it). Without a match, the most recent request wins:
+    stale requests (e.g. a recruitment relaunched several times) must never
+    give a new hire someone else's role and department.
+    """
+    if not _pending_coo_hire_queue:
+        return {}
+    from onemancompany.agents.recruitment import _pending_project_ctx
+
+    project = str(_pending_project_ctx.get(batch_id, {}).get("project_id") or "").split("/")[0]
+    if project:
+        for idx in range(len(_pending_coo_hire_queue) - 1, -1, -1):
+            if str(_pending_coo_hire_queue[idx].get("project_id") or "").split("/")[0] == project:
+                return _pending_coo_hire_queue.pop(idx)
+    return _pending_coo_hire_queue.pop()
+
 # Per-employee OAuth wait context — for OAuth employees, the hire completes
 # only after login. This maps employee_id -> COO context so oauth_callback
 # can notify COO.
@@ -4393,9 +4413,8 @@ async def hire_candidate(body: HireRequest) -> dict:
         return {"error": "Candidate not found"}
 
     # Pop COO hiring context (FIFO) — overrides talent's indicative role
-    coo_ctx: dict = {}
-    if _pending_coo_hire_queue:
-        coo_ctx = _pending_coo_hire_queue.pop(0)
+    coo_ctx: dict = _take_coo_hire_ctx(body.batch_id)
+    if coo_ctx:
         logger.info("[hiring] Applying COO context: role='{}' over talent role='{}'", coo_ctx.get("role"), candidate.get("role"))
 
     # Launch onboarding as background task
@@ -4932,7 +4951,7 @@ async def batch_hire_candidates(body: dict) -> dict:
     coo_ctxs = []
     for _ in selections:
         if _pending_coo_hire_queue:
-            coo_ctxs.append(_pending_coo_hire_queue.pop(0))
+            coo_ctxs.append(_take_coo_hire_ctx(batch_id))
         else:
             coo_ctxs.append({})
 
@@ -6420,6 +6439,15 @@ async def internal_tool_call(body: dict, request: Request) -> dict:
     # an employee cannot call this endpoint as someone else.
     if not verify_caller(str(employee_id), request.headers.get(CALLER_HEADER)):
         raise HTTPException(403, "Unsigned or invalid caller")
+
+    # The MCP server's task_id is fixed when the employee's session starts,
+    # but a session lives across many tasks: the task the employee is
+    # running right now is the one that counts.
+    from onemancompany.core.vessel import employee_manager
+
+    current = employee_manager._current_entries.get(str(employee_id))
+    if current is not None and current.node_id:
+        task_id = current.node_id
 
     # For MCP calls, set task_id context var (vessel doesn't set it)
     task_token = None
