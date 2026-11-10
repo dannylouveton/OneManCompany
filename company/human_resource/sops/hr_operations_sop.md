@@ -28,6 +28,7 @@ Nickname: 2-character wuxia-style Chinese nickname. E.g. 逍遥, 追风, 凌霄,
 ## 5. Probation
 - New hires start with probation=True.
 - After completing 2 tasks (PROBATION_TASKS), run a probation review.
+- Judge it like top performers are judged: did they take ownership beyond what they were asked, and did they finish what others left undone?
 - Output JSON: `{"action": "probation_review", "employee_id": "...", "passed": true/false, "feedback": "..."}`
 - If passed: set probation=False. If failed: fire the employee.
 

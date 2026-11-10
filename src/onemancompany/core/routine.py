@@ -2609,8 +2609,9 @@ async def _create_project_from_action_points(
 from onemancompany.core.config import PROBATION_TASKS  # noqa: E402
 
 
-async def run_onboarding_routine(employee_id: str) -> None:
-    """Run onboarding for a new employee: welcome, team intro, probation brief."""
+async def run_onboarding_routine(employee_id: str, hire_context: str = "", start_mission: bool = True) -> None:
+    """Run onboarding for a new employee: welcome, team intro, probation brief,
+    then the onboarding charter, first mission and weekly round."""
     emp_data = load_employee(employee_id)
     if not emp_data:
         return
@@ -2649,6 +2650,10 @@ async def run_onboarding_routine(employee_id: str) -> None:
     await _store.save_employee(employee_id, {"onboarding_completed": True})
 
     await _publish(EventType.ONBOARDING_COMPLETED, {"id": employee_id, "name": emp_name})
+
+    if start_mission:
+        from onemancompany.core.onboarding_mission import onboard
+        await onboard(employee_id, hire_context)
 
 
 # ---------------------------------------------------------------------------

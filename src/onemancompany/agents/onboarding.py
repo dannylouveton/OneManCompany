@@ -904,6 +904,7 @@ async def execute_hire(
     remote: bool = False,
     department: str = "",
     progress_callback=None,  # async callable(step, message)
+    hire_context: str = "",
 ) -> Employee:
     """Execute the full hire flow in code — no LLM involved.
 
@@ -1139,6 +1140,9 @@ async def execute_hire(
     # Trigger onboarding routine as background task
     from onemancompany.core.routine import run_onboarding_routine
     from onemancompany.core.async_utils import spawn_background
-    spawn_background(run_onboarding_routine(emp_num))
+    # OAuth employees cannot work before their login: no mission yet for them
+    # (it can be launched later from their profile).
+    spawn_background(run_onboarding_routine(
+        emp_num, hire_context=hire_context, start_mission=auth_method != "oauth"))
 
     return emp

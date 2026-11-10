@@ -1961,6 +1961,21 @@ async def update_employee_model(employee_id: str, body: dict) -> dict:
     return {"status": "updated", "employee_id": employee_id, "model": model_id, "salary_per_1m_tokens": new_salary}
 
 
+@router.post("/api/employee/{employee_id}/onboarding-mission")
+async def launch_onboarding_mission(employee_id: str, body: dict | None = None) -> dict:
+    """Give an employee already on the team the onboarding charter, first mission and weekly round."""
+    from onemancompany.core.config import FOUNDING_IDS
+    from onemancompany.core.onboarding_mission import onboard
+
+    _require_employee(employee_id)
+    if employee_id in FOUNDING_IDS or employee_id == CEO_ID:
+        raise HTTPException(status_code=400, detail="Founding executives do not get an onboarding mission")
+    result = await onboard(employee_id, str((body or {}).get("context") or ""), force=True)
+    if result.get("error"):
+        raise HTTPException(status_code=500, detail=result["error"])
+    return {"status": "ok", **result}
+
+
 @router.put("/api/employee/{employee_id}/hosting")
 async def update_employee_hosting(employee_id: str, body: dict) -> dict:
     """Switch an employee's hosting mode (agent family) with live hot-swap.
@@ -4669,6 +4684,7 @@ async def _do_hire_single(
             remote=candidate.get("remote", False),
             department=hire_department,
             progress_callback=_single_progress,
+            hire_context=str(coo_ctx.get("reason") or ""),
         )
 
         # Notify COO that the hire is ready (or stash for OAuth completion)
@@ -5111,6 +5127,7 @@ async def _do_batch_hire(
                     remote=candidate.get("remote", False),
                     department=final_dept,
                     progress_callback=progress_cb,
+                    hire_context=str(coo_ctx.get("reason") or ""),
                 )
                 results.append({"candidate_id": candidate_id, "status": "hired", "employee_id": emp.id, "name": cand_name, "nickname": nickname})
 

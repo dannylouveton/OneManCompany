@@ -29,6 +29,7 @@ Surnom : surnom chinois de 2 caractères dans le style wuxia. Ex. 逍遥, 追风
 ## 5. Période d'essai
 - Les nouvelles recrues commencent avec probation=True.
 - Après 2 tâches terminées (PROBATION_TASKS), faire une évaluation de fin d'essai.
+- L'évaluer comme on juge les meilleurs : a-t-il pris en charge plus que ce qu'on lui demandait, et a-t-il fini ce que d'autres avaient laissé en plan ?
 - Format de sortie JSON : `{"action": "probation_review", "employee_id": "...", "passed": true/false, "feedback": "..."}`
 - Réussie : passer probation=False. Échouée : licencier l'employé.
 

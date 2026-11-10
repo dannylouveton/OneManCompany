@@ -18,6 +18,8 @@
   const DICTS = {
     fr: {
       "Actions": "Actions",
+      "Launch onboarding mission": "Lancer la mission d'intégration",
+      "Onboarding mission launched": "Mission d'intégration lancée",
       "My answers:": "Mes réponses :",
       "(no answer)": "(pas de réponse)",
       "Several choices possible": "Plusieurs choix possibles",
