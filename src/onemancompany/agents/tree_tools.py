@@ -298,7 +298,7 @@ def dispatch_child(
             return {"status": "error", "message": "Current task not found in task tree."}  # pragma: no cover
 
         # EA dispatch restrictions
-        from onemancompany.core.config import EA_ID, HR_ID, COO_ID, CSO_ID
+        from onemancompany.core.config import EA_ID, HR_ID, COO_ID, CSO_ID, DSI_ID
         if current_node.employee_id == EA_ID:
             # Self-dispatch guard — always blocked
             if target_employee_id == EA_ID:
@@ -308,14 +308,15 @@ def dispatch_child(
                 }
             # O-level restriction — only in standard mode
             if tree.mode != "simple":
-                allowed_targets = {HR_ID, COO_ID, CSO_ID}
+                allowed_targets = {HR_ID, COO_ID, CSO_ID} | ({DSI_ID} if DSI_ID else set())
                 if target_employee_id not in allowed_targets:
                     suggestion = f"COO({COO_ID})"
+                    dsi = f", DSI({DSI_ID}) for IT, accounts and access" if DSI_ID else ""
                     return {
                         "status": "error",
                         "message": (
                             f"EA cannot directly dispatch tasks to {target_employee_id}. "
-                            f"Please dispatch_child to the corresponding O-level executive instead: HR({HR_ID}), COO({COO_ID}), CSO({CSO_ID}). "
+                            f"Please dispatch_child to the corresponding O-level executive instead: HR({HR_ID}), COO({COO_ID}), CSO({CSO_ID}){dsi}. "
                             f"Hint: for development/design/operations tasks, dispatch to {suggestion} to organize team execution. "
                             f"Please immediately re-call dispatch_child with the correct target_employee_id."
                         ),

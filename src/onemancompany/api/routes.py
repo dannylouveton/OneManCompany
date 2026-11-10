@@ -2005,8 +2005,11 @@ async def update_employee_hosting(employee_id: str, body: dict) -> dict:
         from onemancompany.agents.coo_agent import COOAgent
         from onemancompany.agents.ea_agent import EAAgent
         from onemancompany.agents.cso_agent import CSOAgent
-        from onemancompany.core.config import HR_ID, COO_ID, EA_ID, CSO_ID
+        from onemancompany.agents.dsi_agent import DSIAgent
+        from onemancompany.core.config import HR_ID, COO_ID, EA_ID, CSO_ID, DSI_ID
         _founding_map = {HR_ID: HRAgent, COO_ID: COOAgent, EA_ID: EAAgent, CSO_ID: CSOAgent}
+        if DSI_ID:
+            _founding_map[DSI_ID] = DSIAgent
         agent_cls = _founding_map.get(employee_id)
 
     try:

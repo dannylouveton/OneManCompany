@@ -504,6 +504,40 @@ class TestEADispatchConstraint:
         finally:
             _reset_context(tok_v, tok_t)
 
+    def test_ea_can_dispatch_to_the_founding_dsi(self):
+        """The founding DSI is an O-level executive: the EA routes IT and access work to them."""
+        from onemancompany.agents.tree_tools import dispatch_child
+
+        tree = _make_tree_with_root(employee_id="00004")
+        root_id = tree.root_id
+        vessel = _make_vessel_and_task()
+        tok_v, tok_t = _set_context(vessel, root_id)
+        mock_em = _make_mock_em(root_id)
+
+        try:
+            with (
+                patch("onemancompany.core.config.DSI_ID", "00009"),
+                patch("onemancompany.agents.tree_tools._load_tree", return_value=tree),
+                patch("onemancompany.agents.tree_tools._save_tree"),
+                patch("onemancompany.core.store.load_employee", return_value={"id": "00009", "name": "Charlie DSI"}),
+                patch("onemancompany.core.vessel.employee_manager", mock_em),
+            ):
+                ok = dispatch_child.invoke({
+                    "target_employee_id": "00009",
+                    "description": "create the Scaleway accounts",
+                    "acceptance_criteria": ["accounts in the vault"],
+                })
+                refused = dispatch_child.invoke({
+                    "target_employee_id": "00006",
+                    "description": "do coding",
+                    "acceptance_criteria": ["done"],
+                })
+
+            assert ok["status"] == "dispatched"
+            assert refused["status"] == "error" and "DSI(00009)" in refused["message"]
+        finally:
+            _reset_context(tok_v, tok_t)
+
     def test_ea_can_dispatch_to_regular_employee_in_simple_mode(self):
         """EA can dispatch to non-O-level when tree mode is simple."""
         from onemancompany.agents.tree_tools import dispatch_child

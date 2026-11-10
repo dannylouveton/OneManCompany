@@ -527,6 +527,10 @@ async def lifespan(app: FastAPI):
         _HR_ID: HRAgent, _COO_ID: COOAgent,
         _EA_ID: EAAgent, _CSO_ID: CSOAgent,
     }
+    from onemancompany.core import config as _config
+    if _config.DSI_ID:  # founding too, with a number of its own (core/founding.py)
+        from onemancompany.agents.dsi_agent import DSIAgent
+        _founding_agents[_config.DSI_ID] = DSIAgent
     _registered_founding = set()
     for _fid, _agent_cls in _founding_agents.items():
         register_founding_employee(_fid, _agent_cls, _emp_cfgs, _EMPLOYEES_DIR)
@@ -737,9 +741,33 @@ app.include_router(router)
 app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
 
 
+ENV_FOUNDING_DSI_RESTART = "OMC_FOUNDING_DSI_RESTART"
+
+
+def _ensure_founding_dsi() -> None:
+    """A company without its founding DSI gets one, then the process restarts once.
+
+    The founding team is read once at import (config.EXEC_IDS / FOUNDING_IDS,
+    copied by value across modules): restarting is how every module counts the
+    new executive. The environment flag stops any restart loop.
+    """
+    from onemancompany.core import config
+
+    if config.DSI_ID or os.environ.get(ENV_FOUNDING_DSI_RESTART):
+        return
+    from onemancompany.core.founding import create_founding_dsi
+
+    if not create_founding_dsi():
+        return
+    os.environ[ENV_FOUNDING_DSI_RESTART] = "1"
+    logger.info("[startup] Founding DSI created — restarting once so the whole company counts them")
+    os.execv(sys.executable, [sys.executable, "-m", "onemancompany.main"])
+
+
 def run() -> None:
     from onemancompany.core.config import settings
 
+    _ensure_founding_dsi()
     app.state.port = settings.port
     uvicorn.run(
         "onemancompany.main:app",

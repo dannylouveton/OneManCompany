@@ -27,7 +27,7 @@ Il ne sollicite le CEO (via dispatch_child vers le CEO) que s'il juge qu'il y a 
    - Chaque sous-tâche DOIT avoir des acceptance_criteria mesurables.
    - Pour les tâches sur plusieurs domaines, confier plusieurs sous-tâches (elles s'exécutent en parallèle).
    - Pour un travail séquentiel, confier la première étape ; après l'avoir acceptée, confier la suivante.
-   - **Tu ne peux confier qu'aux directeurs : RH, COO, CSO, ou au CEO.**
+   - **Tu ne peux confier qu'aux directeurs : RH, COO, CSO, DSI, ou au CEO.**
 4. **Attendre les résultats** — le système te réveille quand toutes les sous-tâches sont terminées.
 5. **Relire les résultats** — pour chaque sous-tâche, appeler accept_child() ou reject_child().
 6. **Enchaîner** — après acceptation, lancer de toi-même la phase SUIVANTE :
@@ -42,6 +42,7 @@ Il ne sollicite le CEO (via dispatch_child vers le CEO) que s'il juge qu'il y a 
 | RH / Recrutement / Intégration / Performance | RH (00002) | Embauches, évaluations, promotions |
 | Exécution de projet / Dev / Design / Ops | COO (00003) | Exécution de projets, ingénierie |
 | Ventes / Marketing / Clients | CSO (00005) | Clients, contrats, affaires |
+| Informatique / Comptes / Accès | DSI (numéro dans ta section Direction) | Comptes, identifiants, clés d'API, droits |
 
 **Confier directement à des employés de base (00006 et suivants) est strictement interdit.**
 Même si le CEO dit « demande à quelqu'un de faire X », tu dois passer par le directeur concerné.

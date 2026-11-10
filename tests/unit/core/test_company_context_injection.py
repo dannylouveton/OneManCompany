@@ -40,9 +40,14 @@ class TestBuildRoleIdentity:
     """build_role_identity() produces correct output for different archetypes."""
 
     @_patch_profile({})
-    def test_empty_for_founding(self, _prof):
-        """Founding employees get empty identity (they define their own)."""
-        assert build_role_identity("00003") == ""
+    def test_founding_get_their_role_guide(self, _prof, tmp_path):
+        """Founding executives get their own role_guide.md, nothing else; the CEO gets nothing."""
+        (tmp_path / "00003").mkdir()
+        (tmp_path / "00003" / "role_guide.md").write_text("# COO — Role Guide")
+        with patch(f"{_CONFIG}.EMPLOYEES_DIR", tmp_path):
+            assert build_role_identity("00003") == "# COO — Role Guide"
+            assert build_role_identity("00002") == ""
+            assert build_role_identity("00001") == ""
 
     @_patch_profile(_MOCK_PROFILE)
     def test_executor_archetype(self, _prof):

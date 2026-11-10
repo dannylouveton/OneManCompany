@@ -1643,7 +1643,7 @@ class AppController {
     avatarImg.onload = function() { this.style.display = ''; };
 
     // Populate data
-    const roleIcon = emp.role === 'HR' ? '💼' : emp.role === 'COO' ? '⚙️' : '🤖';
+    const roleIcon = emp.role === 'HR' ? '💼' : emp.role === 'COO' ? '⚙️' : emp.role === 'DSI' ? '🔐' : '🤖';
     document.getElementById('emp-modal-title').textContent = `${roleIcon} ${emp.name || ''} Details`;
     document.getElementById('emp-detail-number').textContent = emp.employee_number || '-';
     document.getElementById('emp-detail-name').textContent = emp.name || '-';
@@ -3691,7 +3691,8 @@ class AppController {
 
   /** Charter + first mission + weekly round for someone already on the team. */
   _renderOnboardingMissionButton(empId, container) {
-    if (['00001', '00002', '00003', '00004', '00005'].includes(empId)) return;
+    const emp = (this._cachedEmployees || []).find(e => e.id === empId);
+    if (empId === '00001' || !emp || emp.level >= 4) return;  // CEO and founding executives
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:3px;';
     row.innerHTML = '<button class="pixel-btn small secondary">Start onboarding</button>';
@@ -11029,7 +11030,7 @@ class AppController {
         panel.querySelectorAll('.project-team-member').forEach(el => {
           el.addEventListener('click', () => {
             const empId = el.dataset.empId;
-            const emp = this.employees.find(e => e.id === empId);
+            const emp = (this._cachedEmployees || []).find(e => e.id === empId);
             if (emp) this.openEmployeeDetail(emp);
           });
         });

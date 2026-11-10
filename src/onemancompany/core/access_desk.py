@@ -1,4 +1,7 @@
-"""Access desk: employees ask, the COO decides, the CEO only creates keys and accounts.
+"""Access desk: employees ask, the DSI decides, the CEO only creates keys and accounts.
+
+The DSI is a founding executive (core/founding.py); "COO" below is where the
+desk falls back for a company that has no DSI yet.
 
 1. An employee calls ``request_access`` (service, why, read or write, what is
    blocked). One request per service stays open while several employees can
@@ -241,9 +244,12 @@ def is_dsi_role(role: str) -> bool:
 
 
 def dsi_id() -> str:
-    """The company's DSI (head of IT and access), or "" if there is none yet."""
+    """The company's DSI (head of IT and access): the founding one, else anyone holding the role, else ""."""
+    from onemancompany.core import config
     from onemancompany.core.store import load_all_employees
 
+    if config.DSI_ID:
+        return config.DSI_ID
     try:
         employees = load_all_employees() or {}
     except Exception:  # pragma: no cover - never break the desk on a store error
@@ -395,26 +401,27 @@ async def post_to_thread(project_id: str, employee_id: str, text: str) -> None:
 def thread_text(event: str, req: dict, entry: dict | None = None) -> str:
     """Short lines for the project thread: request, card for the CEO, decision."""
     fr = _lang() == "fr"
+    desk = DSI_ROLE if dsi_id() else "COO"  # who runs the desk
     service = req.get("service", "")
     if event == "requested" and entry:
         rights = (("lecture seule" if entry.get("access") == "read" else "lecture et écriture") if fr
                   else ("read-only" if entry.get("access") == "read" else "read and write"))
         opener = entry.get("opened_by") or ""
         if fr:
-            sent = f" Demande ouverte par {opener} ; le COO s'en occupe." if opener else " Transmise au COO."
+            sent = f" Demande ouverte par {opener} ; le {desk} s'en occupe." if opener else f" Transmise au {desk}."
             return (f"🔑 Demande d'accès : {service} ({rights}) — {label(entry['employee'])}. Pourquoi : "
                     f"{entry.get('reason', '')}{sent}")
-        sent = f" Opened by {opener}; the COO handles it." if opener else " Sent to the COO."
+        sent = f" Opened by {opener}; the {desk} handles it." if opener else f" Sent to the {desk}."
         return (f"🔑 Access request: {service} ({rights}) — {label(entry['employee'])}. Why: "
                 f"{entry.get('reason', '')}{sent}")
     if event == "escalated":
         card = req.get("card") or {}
         what = card.get("what", "")
         if card.get("deliverable") == "action":  # nothing to create: something for the CEO to do
-            return (f"🔑 {service} : le COO a envoyé une demande au CEO : « {what} ». La carte attend dans la boîte 🔑."
-                    if fr else f"🔑 {service}: the COO sent the CEO a request: \"{what}\". The card is in the 🔑 box.")
-        return (f"🔑 {service} : le COO demande au CEO de créer « {what} ». La carte attend dans la boîte 🔑."
-                if fr else f"🔑 {service}: the COO asked the CEO to create \"{what}\". The card is in the 🔑 box.")
+            return (f"🔑 {service} : le {desk} a envoyé une demande au CEO : « {what} ». La carte attend dans la boîte 🔑."
+                    if fr else f"🔑 {service}: the {desk} sent the CEO a request: \"{what}\". The card is in the 🔑 box.")
+        return (f"🔑 {service} : le {desk} demande au CEO de créer « {what} ». La carte attend dans la boîte 🔑."
+                if fr else f"🔑 {service}: the {desk} asked the CEO to create \"{what}\". The card is in the 🔑 box.")
     return "🔑 " + outcome_text(req, entry or {})
 
 

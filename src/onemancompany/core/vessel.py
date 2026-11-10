@@ -267,22 +267,26 @@ def _load_archetype_templates() -> tuple[str, str]:
 def build_role_identity(employee_id: str) -> str:
     """Generate standardized role identity block from employee profile.
 
-    Returns empty string for founding employees (they define their own via role_guide.md).
+    Founding executives get their own role_guide.md (nothing for the CEO), so
+    a founding executive run by Claude Code knows its role as well as one run
+    in LangChain (whose agent class reads the same file).
     Called by:
       - BaseAgentRunner._get_role_identity_section() → system prompt (LangChain)
       - EmployeeManager._build_company_context_block() → task prompt (Claude CLI / Script)
     """
     from onemancompany.core.config import (
-        FOUNDING_IDS, PF_NAME, PF_NICKNAME, PF_ROLE, PF_DEPARTMENT, PF_LEVEL,
+        CEO_ID, FOUNDING_IDS, PF_NAME, PF_NICKNAME, PF_ROLE, PF_DEPARTMENT, PF_LEVEL,
         EMPLOYEES_DIR, load_employee_profile_yaml, read_text_utf,
     )
-    if employee_id in FOUNDING_IDS:
+    if employee_id == CEO_ID:
         return ""
 
-    # Check for role_guide.md first (per-employee override)
+    # Check for role_guide.md first (per-employee override; every founding executive has one)
     guide_path = EMPLOYEES_DIR / employee_id / "role_guide.md"
     if guide_path.exists():
         return read_text_utf(guide_path)
+    if employee_id in FOUNDING_IDS:
+        return ""
 
     profile = load_employee_profile_yaml(employee_id)
     # Then the guide of the role (e.g. role_guides/DSI.md), shared by everyone holding it
@@ -2576,6 +2580,15 @@ class EmployeeManager:
             identity = build_role_identity(employee_id)
             if identity:
                 parts.append(identity)
+
+        # 0b. The founding DSI has no fixed number: the other executives get it here
+        from onemancompany.core.config import DSI_ID, EXEC_IDS
+        if DSI_ID and employee_id in EXEC_IDS and employee_id != DSI_ID:
+            parts.append(
+                f"## Direction — the DSI\n"
+                f"The DSI ({DSI_ID}) is the founding head of IT: accounts, logins, API keys, rights, "
+                f"the access desk and the company vault. IT and access work goes to them."
+            )
 
         # 1. Company culture
         culture_items = _store.load_culture()

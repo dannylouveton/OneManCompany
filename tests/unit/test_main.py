@@ -941,9 +941,12 @@ class TestRun:
 
         mock_uvicorn_run = MagicMock()
         monkeypatch.setattr(main_mod, "uvicorn", MagicMock(run=mock_uvicorn_run))
+        ensure_dsi = MagicMock()
+        monkeypatch.setattr(main_mod, "_ensure_founding_dsi", ensure_dsi)
 
         main_mod.run()
 
+        ensure_dsi.assert_called_once()  # before uvicorn: it may restart the process
         mock_uvicorn_run.assert_called_once()
         call_kwargs = mock_uvicorn_run.call_args
         assert call_kwargs[1]["host"] == "0.0.0.0"

@@ -150,12 +150,22 @@ def compute_layout(company_state) -> dict:
 
 
 def _get_executive_positions() -> dict[str, tuple[int, int]]:
-    """Return fixed executive desk positions."""
+    """Return fixed executive desk positions (the CEO's desk is at x=9, drawn by the frontend)."""
+    from onemancompany.core import config
+
+    if not config.DSI_ID:
+        return {
+            HR_ID: (1, EXEC_ROW_GY),
+            EA_ID: (5, EXEC_ROW_GY),
+            COO_ID: (13, EXEC_ROW_GY),
+            CSO_ID: (17, EXEC_ROW_GY),
+        }
     return {
         HR_ID: (1, EXEC_ROW_GY),
         EA_ID: (5, EXEC_ROW_GY),
-        COO_ID: (13, EXEC_ROW_GY),
-        CSO_ID: (17, EXEC_ROW_GY),
+        COO_ID: (12, EXEC_ROW_GY),
+        config.DSI_ID: (15, EXEC_ROW_GY),
+        CSO_ID: (18, EXEC_ROW_GY),
     }
 
 

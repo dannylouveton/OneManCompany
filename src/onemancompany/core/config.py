@@ -258,8 +258,16 @@ COO_ID = "00003"
 EA_ID = "00004"
 CSO_ID = "00005"
 
+
+# The founding DSI (head of IT and access) has no fixed number: companies
+# created before it existed already used 00006 and up. Found once at start;
+# a company without one gets it on its first start (core/founding.py).
+from onemancompany.core.founding import founding_dsi_on_disk  # noqa: E402
+
+DSI_ID = founding_dsi_on_disk(EMPLOYEES_DIR)
+
 # All founding executive IDs (excluding CEO)
-EXEC_IDS: frozenset[str] = frozenset({HR_ID, COO_ID, EA_ID, CSO_ID})
+EXEC_IDS: frozenset[str] = frozenset({HR_ID, COO_ID, EA_ID, CSO_ID} | ({DSI_ID} if DSI_ID else set()))
 # All founding IDs including CEO
 FOUNDING_IDS: frozenset[str] = frozenset({CEO_ID}) | EXEC_IDS
 
