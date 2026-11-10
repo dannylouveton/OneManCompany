@@ -52,8 +52,8 @@ class TestListDeliverables:
     def test_empty_dir(self, tmp_path):
         assert _list_deliverables(str(tmp_path)) == []
 
-    def test_nonexistent_dir(self):
-        assert _list_deliverables("/nonexistent/path") == []
+    def test_nonexistent_dir(self, tmp_path):
+        assert _list_deliverables(str(tmp_path / "missing")) == []
 
     def test_multiple_files_sorted(self, tmp_path):
         (tmp_path / "report.pdf").write_text("r")
@@ -150,3 +150,18 @@ class TestSummarizeProjectForCeo:
     async def test_empty_work_nodes_returns_empty(self):
         result = await _summarize_project_for_ceo("Test Project", [], [])
         assert result == ""
+
+
+class TestListDeliverablesInSubfolders:
+    def test_lists_files_in_subfolders_but_not_traces_or_conversations(self, tmp_path):
+        (tmp_path / "livrables").mkdir()
+        (tmp_path / "livrables" / "cartographie.md").write_text("c")
+        (tmp_path / "livrables" / "check_dispo.sh").write_text("s")
+        (tmp_path / "debug_trace.jsonl").write_text("t")
+        (tmp_path / "conversations" / "abc").mkdir(parents=True)
+        (tmp_path / "conversations" / "abc" / "messages.yaml").write_text("m")
+        (tmp_path / "attachments").mkdir()
+        (tmp_path / "attachments" / "brief.pdf").write_text("a")
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".git" / "HEAD").write_text("h")
+        assert _list_deliverables(str(tmp_path)) == ["livrables/cartographie.md", "livrables/check_dispo.sh"]

@@ -64,3 +64,17 @@ async def test_done_and_refuse(desk):
     assert out["request"]["status"] == "refused"
     with pytest.raises(HTTPException):  # no longer waiting
         await routes.access_request_done(rid, {})
+
+
+@pytest.mark.asyncio
+async def test_ceo_puts_a_mentioned_need_at_the_desk(desk, monkeypatch):
+    opened = AsyncMock(return_value={"status": "opened", "request_id": "r1"})
+    monkeypatch.setattr("onemancompany.agents.access_tools.open_for_employee", opened)
+    monkeypatch.setattr("onemancompany.core.i18n.get_company_language", lambda: "fr")
+    out = await routes.access_request_open({"employee_id": "00007", "service": "n8n", "reason": "erreurs",
+                                            "kind": "api"})
+    assert out["status"] == "opened"
+    assert opened.await_args.kwargs["opened_by"] == "le CEO" and opened.await_args.args[:2] == ("00007", "n8n")
+    opened.return_value = {"status": "error", "message": "Employee not found"}
+    with pytest.raises(HTTPException):
+        await routes.access_request_open({"employee_id": "00042", "service": "n8n", "reason": "x"})

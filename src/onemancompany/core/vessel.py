@@ -22,6 +22,7 @@ import asyncio
 
 from onemancompany.core.async_utils import spawn_background
 import json
+import os
 import uuid
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
@@ -814,19 +815,33 @@ def _collect_work_results(tree, project_dir: str) -> list:
     return results
 
 
+_DELIVERABLE_SKIP_DIRS = {"nodes", "conversations", "attachments", "node_modules", "__pycache__", "venv"}
+_DELIVERABLE_SKIP_FILES = {"task_tree.yaml", "llm_traces.jsonl", "debug_trace.jsonl", "iteration.yaml"}
+_DELIVERABLE_MAX = 200
+
+
 def _list_deliverables(project_dir: str) -> list[str]:
-    """List non-system files in project directory as deliverables."""
-    _skip = {"nodes", "task_tree.yaml", "llm_traces.jsonl", "iteration.yaml", ".DS_Store"}
+    """Files the team produced in the project directory, subfolders included (relative paths).
+
+    System files (task tree, traces, node logs, conversations, CEO attachments)
+    are left out.
+    """
     pdir = Path(project_dir)
     if not pdir.exists():
         return []
-    files = []
-    for f in sorted(pdir.iterdir()):
-        if f.name in _skip or f.name.startswith("."):
-            continue
-        if f.is_file():
-            files.append(f.name)
-    return files
+    files: list[str] = []
+    for root, dirs, names in os.walk(pdir):
+        here = Path(root)
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".")
+                         and not (here == pdir and d in _DELIVERABLE_SKIP_DIRS)
+                         and d not in ("node_modules", "__pycache__"))
+        for name in sorted(names):
+            if name.startswith(".") or (here == pdir and name in _DELIVERABLE_SKIP_FILES):
+                continue
+            files.append((here / name).relative_to(pdir).as_posix())
+            if len(files) >= _DELIVERABLE_MAX:
+                return sorted(files)
+    return sorted(files)
 
 
 async def _summarize_project_for_ceo(
@@ -3105,7 +3120,8 @@ class EmployeeManager:
 
                 # Project name from project.yaml (not EA description)
                 _base_pid = project_id.split("/")[0] if project_id else ""
-                from onemancompany.core.project_archive import load_project as _load_proj
+                # load_project() returns the latest iteration, which has no name
+                from onemancompany.core.project_archive import load_named_project as _load_proj
                 _proj_doc = _load_proj(_base_pid) if _base_pid else None
                 project_name = (_proj_doc or {}).get("name", "") or ea_node.description_preview[:80]
 

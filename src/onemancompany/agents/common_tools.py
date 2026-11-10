@@ -1492,6 +1492,9 @@ async def report_up(message: str, employee_id: str = "") -> dict:
     passes on only what the next level needs. Use this rather than writing to
     the CEO directly.
 
+    An access you lack (a key, an account, a CLI login) does not go in a
+    report: ask for it with request_access, one request per service.
+
     Args:
         message: A short report: what you did, why, the result, what comes next.
         employee_id: Your employee ID (auto-filled).
@@ -1510,7 +1513,11 @@ async def report_up(message: str, employee_id: str = "") -> dict:
     _push_adhoc_task(manager, (
         f"Report from {_employee_label(employee_id)}, who reports to you:\n\n{message.strip()}\n\n"
         "Read it and act on what concerns you. Then pass on to your own manager, with report_up, "
-        "only what they need to know, in a few lines — or nothing if nothing needs to go up."
+        "only what they need to know, in a few lines — or nothing if nothing needs to go up.\n"
+        "Access the employee says they lack (a key, an account, a CLI login) is never a decision for the CEO: "
+        "it goes to the access desk. If you have open_access_request, open it there, once per service "
+        f"(target_employee_id=\"{employee_id}\", with their reason) and leave it out of what you pass up; "
+        "otherwise pass it up as an access need for the COO's desk."
     ))
     return {"status": "sent", "to": manager}
 

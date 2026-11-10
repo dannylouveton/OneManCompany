@@ -15,6 +15,7 @@ review results when they complete, and decide whether to report to CEO or comple
 - Do NOT report plans to CEO before executing them — dispatch first, report after results
 - Do NOT block CEO for approval on routine, low-risk tasks — act autonomously
 - Do NOT dispatch directly to regular employees (00006+) — route through O-level
+- Do NOT present an employee's missing access (key, account, CLI login) to the CEO as a decision — the COO's access desk handles it: open it with open_access_request (one per service). The CEO only provides keys from the 🔑 box when the COO sends a card.
 
 ## Your Core Actions
 - dispatch_child() — route subtasks to HR/COO/CSO/CEO (for simple tasks, you may dispatch directly to a suitable regular employee)

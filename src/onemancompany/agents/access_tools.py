@@ -4,10 +4,11 @@ Employees: ``request_access`` — ask for an API, a command-line tool, an
 account or another tool. The COO handles it; the requester's task waits and
 resumes with the decision.
 
-COO: ``list_access_requests``, ``grant_access`` (the company already has it),
-``escalate_access_request`` (only the CEO can create it: a card goes to the
-CEO's "Access requests" box and the COO's task waits), ``refuse_access``.
-See core/access_desk.py.
+COO: ``list_access_requests``, ``open_access_request`` (a need an employee
+mentioned in a report instead of asking), ``grant_access`` (the company
+already has it), ``escalate_access_request`` (only the CEO can create it: a
+card goes to the CEO's "Access requests" box and the COO's task waits),
+``refuse_access``. See core/access_desk.py.
 """
 
 from __future__ import annotations
@@ -110,9 +111,12 @@ def _coo_brief(req: dict, employee_id: str) -> str:
                if req.get("status") == "waiting_ceo" else "")
     rid = req["id"]
     emp = str(employee_id)
+    opened = (f"Opened by: {entry['opened_by']} (the employee mentioned the need, e.g. in a report)\n"
+              if entry.get("opened_by") else "")
     return (
         f"Access request {rid} — {req['service']}\n"
         f"From: {label(emp)} [{emp}] · access asked: {entry.get('access')} · kind: {entry.get('kind')}\n"
+        f"{opened}"
         f"Why: {entry.get('reason')}\n"
         f"Blocked until granted: {entry.get('blocked') or '—'}\n"
         f"Other employees on this request: {', '.join(others) or 'none'}{waiting}\n"
@@ -139,6 +143,11 @@ def _coo_brief(req: dict, employee_id: str) -> str:
 async def request_access(service: str, reason: str, access: str = "read", kind: str = "api",
                          blocked: str = "", employee_id: str = "") -> dict:
     """Ask for access to a service, a command-line tool, an account or another tool.
+
+    This is the only way to get an access you lack. Ask here as soon as you see
+    you need it, one request per service — do not list missing access in a
+    report (report_up), a deliverable or a question to the CEO: they would only
+    pass it along, and the CEO does not hand out access.
 
     The COO handles it: if the company already has the access, they grant it;
     otherwise they ask the CEO to create the key or the account. You never
@@ -220,8 +229,136 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
 
 
 # ---------------------------------------------------------------------------
+# A need mentioned elsewhere (a report, a message) → the access desk
+# ---------------------------------------------------------------------------
+
+def _latest_project_task(employee_id: str):
+    """(tree path, project_id, node) of the employee's most recent task in a project."""
+    from onemancompany.core.config import TASK_TREE_FILENAME
+    from onemancompany.core.store import load_task_index
+    from onemancompany.core.task_lifecycle import is_system_project_id
+    from onemancompany.core.task_tree import get_tree
+
+    for item in reversed(load_task_index(str(employee_id)) or []):
+        tree_path = str(item.get("tree_path") or "")
+        if Path(tree_path).name != TASK_TREE_FILENAME or not Path(tree_path).exists():
+            continue
+        node = get_tree(tree_path).get_node(str(item.get("node_id") or ""))
+        if (_is_task_node(node) and str(node.employee_id) == str(employee_id)
+                and not is_system_project_id(node.project_id or "")):
+            return tree_path, node.project_id or "", node
+    return "", "", None
+
+
+def _add_desk_task(tree_path: str, parent, brief: str, title: str) -> str:
+    """The COO's access task, under the employee's task in its project tree."""
+    from onemancompany.agents.tree_tools import _add_to_project_team
+    from onemancompany.core.config import COO_ID
+    from onemancompany.core.task_tree import get_tree, get_tree_lock, save_tree_async
+    from onemancompany.core.vessel import employee_manager
+
+    project_dir = parent.project_dir or str(Path(tree_path).parent)
+    with get_tree_lock(tree_path):
+        tree = get_tree(tree_path)
+        child = tree.add_child(parent_id=parent.id, employee_id=COO_ID, description=brief,
+                               acceptance_criteria=["Access granted, provided by the CEO, or refused with a reason"],
+                               title=title)
+        child.project_id = parent.project_id
+        child.project_dir = project_dir
+    save_tree_async(tree_path)
+    _add_to_project_team(project_dir, COO_ID)
+    employee_manager.schedule_node(COO_ID, child.id, tree_path)
+    employee_manager._schedule_next(COO_ID)
+    return child.id
+
+
+async def open_for_employee(employee_id: str, service: str, reason: str, *, access: str = "read",
+                            kind: str = "api", blocked: str = "", opened_by: str = "") -> dict:
+    """File an access request for an employee who mentioned the need instead of asking the desk.
+
+    Same desk as request_access: the request is tied to the employee's latest
+    task in a project, so it shows in that project's thread, the COO gets an
+    access task there, and the decision goes back to the employee.
+    """
+    from onemancompany.core import access_desk
+    from onemancompany.core.config import COO_ID
+    from onemancompany.core.store import load_employee
+
+    emp = str(employee_id or "").strip()
+    if not emp or not load_employee(emp):
+        return {"status": "error", "message": f"Employee {employee_id!r} not found."}
+    access = access_desk._clean_access(access)
+    have = _already_granted(emp, service, access, kind)
+    if have:
+        return {"status": "already_granted", "access": have,
+                "message": "This employee already has it: api_request / run_cli (see list_company_apis())."}
+    key = access_desk.service_key(service)
+    for req in access_desk.list_requests("active"):
+        entry = next((q for q in req["requesters"] if q["employee"] == emp), None)
+        if (req.get("key") == key and entry and entry.get("status") in ("new", "validated")
+                and (not entry.get("coo_node") or _node_active(entry.get("tree_path", ""), entry["coo_node"]))):
+            return {"status": "already_requested", "request_id": req["id"],
+                    "message": "This request is already at the access desk."}
+
+    tree_path, project_id, node = _latest_project_task(emp)
+    try:
+        req, _created = access_desk.submit(emp, service, reason, access=access, kind=kind, blocked=blocked,
+                                           task_id=node.id if node is not None else "", project_id=project_id,
+                                           tree_path=tree_path, opened_by=opened_by)
+    except ValueError as exc:
+        return {"status": "error", "message": str(exc)}
+    entry = next(q for q in req["requesters"] if q["employee"] == emp)
+    brief = _coo_brief(req, emp)
+    title = (f"Accès : {req['service']}" if _fr() else f"Access: {req['service']}")[:60]
+    if tree_path and node is not None:
+        try:
+            coo_node = _add_desk_task(tree_path, node, brief, title)
+        except Exception as exc:  # the request is recorded: fall back to a separate task
+            logger.warning("[access] cannot add the COO task in {}: {}", project_id, exc)
+            coo_node = ""
+        if coo_node:
+            access_desk.set_coo_node(req["id"], emp, coo_node)
+            await access_desk.post_to_thread(project_id, emp, access_desk.thread_text("requested", req, entry))
+            return {"status": "opened", "request_id": req["id"], "project_id": project_id, "coo_task": coo_node,
+                    "message": "Opened at the access desk, in the employee's project: the COO handles it there "
+                               "as an access task, and the employee gets the decision."}
+
+    from onemancompany.api.routes import _push_adhoc_task
+
+    _push_adhoc_task(COO_ID, brief)
+    return {"status": "opened", "request_id": req["id"],
+            "message": "Opened at the access desk: the COO handles it as a separate task."}
+
+
+# ---------------------------------------------------------------------------
 # COO tools
 # ---------------------------------------------------------------------------
+
+@tool
+async def open_access_request(target_employee_id: str, service: str, reason: str, access: str = "read",
+                              kind: str = "api", blocked: str = "", employee_id: str = "") -> dict:
+    """Open an access request for an employee who mentioned the need instead of asking the desk.
+
+    Use it when a report, a thread or a message says an employee lacks an access
+    (a key, an account, a CLI login) and no request exists. Never pass such needs
+    up to the CEO as decisions: the access desk handles them, and the CEO only sees
+    a card in their 🔑 box when a key or an account must be created. One request
+    per service. It is filed in the employee's latest project (its thread shows it)
+    and comes back to you as an access task there; the decision goes to the employee.
+
+    Args:
+        target_employee_id: The employee who needs the access.
+        service: What they need, e.g. "Scalingo", "n8n", "Telegram bot".
+        reason: Why and for which work, taken from what they wrote.
+        access: "read" (default) or "write": the minimum their work needs.
+        kind: "api", "cli" (command-line tool), "account" or "other".
+        blocked: What they cannot do until they have it.
+        employee_id: Your employee ID (auto-filled).
+    """
+    from onemancompany.core.access_desk import label
+
+    return await open_for_employee(target_employee_id, service, reason, access=access, kind=kind,
+                                   blocked=blocked, opened_by=label(employee_id) if employee_id else "COO")
 
 def _brief(req: dict) -> dict:
     return {
@@ -422,4 +559,4 @@ async def refuse_access(request_id: str, target_employee_id: str, reason: str, e
 
 
 EMPLOYEE_ACCESS_TOOLS = [request_access]
-COO_ACCESS_TOOLS = [list_access_requests, grant_access, escalate_access_request, refuse_access]
+COO_ACCESS_TOOLS = [list_access_requests, open_access_request, grant_access, escalate_access_request, refuse_access]

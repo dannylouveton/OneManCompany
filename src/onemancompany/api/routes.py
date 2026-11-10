@@ -5675,6 +5675,27 @@ async def access_requests_list(status: str = "waiting_ceo") -> dict:
     return {"requests": [_access_card(r) for r in items], "waiting_ceo": waiting}
 
 
+@router.post("/api/access-requests/open")
+async def access_request_open(body: dict) -> dict:
+    """Put at the access desk a need an employee mentioned instead of asking (e.g. in a report).
+
+    Body: {employee_id, service, reason, access?: "read"|"write", kind?: "api"|"cli"|"account"|"other",
+    blocked?}. The request is tied to the employee's latest project task: its thread shows it, the
+    COO handles it there, and the employee gets the decision.
+    """
+    from onemancompany.agents.access_tools import open_for_employee
+    from onemancompany.core.i18n import get_company_language
+
+    result = await open_for_employee(
+        str(body.get("employee_id", "")), str(body.get("service", "")), str(body.get("reason", "")),
+        access=str(body.get("access") or "read"), kind=str(body.get("kind") or "api"),
+        blocked=str(body.get("blocked") or ""),
+        opened_by="le CEO" if get_company_language() == "fr" else "the CEO")
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("message", ""))
+    return result
+
+
 @router.post("/api/access-requests/{request_id}/provide")
 async def access_request_provide(request_id: str, body: dict) -> dict:
     """The CEO pastes the key. Body: {key, setup?: {name, base_url, auth_in, auth_name, auth_format, docs_url}, note?}.

@@ -139,3 +139,84 @@ def test_coo_tool_grant_keeps_api_key_definition(desk, monkeypatch):
     assert data["allowed_users"] == ["00007"] and data["grants"]["00007"]["granted_by"] == "COO"
     coo_agent.revoke_tool_access.invoke({"tool_id": tool_id, "target_employee_id": "00007"})
     assert api_tools.load_tool(tool_id)["allowed_users"] == []
+
+
+@pytest.mark.asyncio
+async def test_coo_opens_a_need_mentioned_in_a_report(desk, monkeypatch):
+    """A need written in a report goes to the desk, in the employee's project thread, not to the CEO."""
+    node = _task_node("n_onb")
+    monkeypatch.setattr(access_tools, "_latest_project_task", lambda emp: ("/p/task_tree.yaml", "p1/iter_001", node))
+    added = []
+    monkeypatch.setattr(access_tools, "_add_desk_task",
+                        lambda tree_path, parent, brief, title: added.append((tree_path, parent.id, brief, title)) or "n_coo")
+    out = await access_tools.open_access_request.ainvoke({
+        "target_employee_id": "00007", "service": "Scalingo", "kind": "cli",
+        "reason": "revérifier en direct la base et les sauvegardes", "employee_id": "00003"})
+    assert out["status"] == "opened" and out["coo_task"] == "n_coo" and out["project_id"] == "p1/iter_001"
+    tree_path, parent_id, brief, title = added[0]
+    assert (tree_path, parent_id, title) == ("/p/task_tree.yaml", "n_onb", "Accès : Scalingo")
+    assert "Opened by:" in brief and "grant_access" in brief
+    req = access_desk.list_requests()[0]
+    entry = req["requesters"][0]
+    assert entry["task_id"] == "n_onb" and entry["coo_node"] == "n_coo" and entry["opened_by"]
+    posted = access_desk.post_to_thread.await_args.args
+    assert posted[0] == "p1/iter_001" and "Demande ouverte par" in posted[2]
+
+    # Same need again: already at the desk, nothing new
+    monkeypatch.setattr(access_tools, "_node_active", lambda tree, n: n == "n_coo")
+    again = await access_tools.open_access_request.ainvoke({
+        "target_employee_id": "00007", "service": "scalingo", "reason": "idem", "employee_id": "00003"})
+    assert again["status"] == "already_requested" and len(added) == 1
+
+
+@pytest.mark.asyncio
+async def test_open_for_unknown_or_already_equipped_employee(desk, monkeypatch):
+    out = await access_tools.open_for_employee("00042", "Scalingo", "x")
+    assert out["status"] == "error"
+    monkeypatch.setattr(access_tools, "_already_granted", lambda *a: [{"api": "scalingo"}])
+    out = await access_tools.open_for_employee("00007", "Scalingo", "x")
+    assert out["status"] == "already_granted"
+
+
+@pytest.mark.asyncio
+async def test_open_without_project_task_goes_to_the_coo_as_a_separate_task(desk, monkeypatch):
+    monkeypatch.setattr(access_tools, "_latest_project_task", lambda emp: ("", "", None))
+    pushed = []
+    monkeypatch.setattr("onemancompany.api.routes._push_adhoc_task", lambda emp, text, **k: pushed.append((emp, text)))
+    out = await access_tools.open_for_employee("00007", "n8n", "exécutions en erreur", opened_by="le CEO")
+    assert out["status"] == "opened" and pushed[0][0] == "00003" and "n8n" in pushed[0][1]
+    access_desk.post_to_thread.assert_not_awaited()
+
+
+def test_latest_project_task_and_desk_task(desk, tmp_path, monkeypatch):
+    from onemancompany.core.task_tree import TaskTree
+
+    pdir = tmp_path / "proj" / "iterations" / "iter_001"
+    pdir.mkdir(parents=True)
+    tree = TaskTree(project_id="proj/iter_001")
+    root = tree.create_root(employee_id="00001", description="Prise de poste")
+    child = tree.add_child(parent_id=root.id, employee_id="00007", description="note", acceptance_criteria=[])
+    child.project_id = "proj/iter_001"
+    child.project_dir = str(pdir)
+    tree_path = pdir / "task_tree.yaml"
+    tree.save(tree_path)
+    sys_tree = tmp_path / "x_tree.yaml"
+    TaskTree(project_id="_sys_1").save(sys_tree)
+    monkeypatch.setattr("onemancompany.core.store.load_task_index",
+                        lambda emp: [{"node_id": child.id, "tree_path": str(tree_path)},
+                                     {"node_id": "zz", "tree_path": str(sys_tree)}])
+    found_path, project_id, node = access_tools._latest_project_task("00007")
+    assert found_path == str(tree_path) and project_id == "proj/iter_001" and node.id == child.id
+
+    scheduled = []
+    monkeypatch.setattr("onemancompany.agents.tree_tools._add_to_project_team", lambda d, e: None)
+    monkeypatch.setattr("onemancompany.core.vessel.employee_manager.schedule_node",
+                        lambda emp, nid, path: scheduled.append((emp, nid, path)))
+    monkeypatch.setattr("onemancompany.core.vessel.employee_manager._schedule_next", lambda emp: None)
+    monkeypatch.setattr("onemancompany.core.task_tree.save_tree_async", lambda path: None)
+    coo_node = access_tools._add_desk_task(str(tree_path), node, "brief", "Accès : Scalingo")
+    from onemancompany.core.task_tree import get_tree
+
+    added = get_tree(str(tree_path)).get_node(coo_node)
+    assert added.parent_id == child.id and added.employee_id == "00003" and added.project_id == "proj/iter_001"
+    assert scheduled == [("00003", coo_node, str(tree_path))]

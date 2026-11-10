@@ -230,8 +230,13 @@ def _clean_access(access: str) -> str:
 
 
 def submit(employee_id: str, service: str, reason: str, *, access: str = "read", kind: str = "api",
-           blocked: str = "", task_id: str = "", project_id: str = "", tree_path: str = "") -> tuple[dict, bool]:
-    """Record a request (or join the open one for this service). Returns (request, created)."""
+           blocked: str = "", task_id: str = "", project_id: str = "", tree_path: str = "",
+           opened_by: str = "") -> tuple[dict, bool]:
+    """Record a request (or join the open one for this service). Returns (request, created).
+
+    ``opened_by``: set when someone else files it for the employee (the COO or
+    the CEO, from a report that mentioned the need).
+    """
     service = " ".join(str(service or "").split())[:80]
     reason = str(reason or "").strip()[:2000]
     if not service:
@@ -242,7 +247,8 @@ def submit(employee_id: str, service: str, reason: str, *, access: str = "read",
     kind = kind if kind in KINDS else "other"
     emp = str(employee_id)
     fields = {"reason": reason, "access": access, "kind": kind, "blocked": str(blocked or "").strip()[:1000],
-              "task_id": task_id, "project_id": project_id, "tree_path": tree_path, "requested_at": _now()}
+              "task_id": task_id, "project_id": project_id, "tree_path": tree_path, "requested_at": _now(),
+              "opened_by": str(opened_by or "")}
     with _lock:
         items = _load()
         key = service_key(service)
@@ -261,7 +267,7 @@ def submit(employee_id: str, service: str, reason: str, *, access: str = "read",
             if entry.get("access") == "write":
                 fields["access"] = "write"  # never downgrade an earlier write request
             entry.update(fields, status="new", coo_node="", decided_at="", decided_by="", note="", delivered_at="")
-        _history(req, emp, "requested", f"{access}: {reason}")
+        _history(req, emp, "requested", f"{access}: {reason}" + (f" (opened by {opened_by})" if opened_by else ""))
         _save(items)
         out = copy.deepcopy(req)
     _publish(out)
@@ -340,10 +346,14 @@ def thread_text(event: str, req: dict, entry: dict | None = None) -> str:
     if event == "requested" and entry:
         rights = (("lecture seule" if entry.get("access") == "read" else "lecture et écriture") if fr
                   else ("read-only" if entry.get("access") == "read" else "read and write"))
-        return (f"🔑 Demande d'accès : {service} ({rights}) — {label(entry['employee'])}. Pourquoi : "
-                f"{entry.get('reason', '')} Transmise au COO." if fr else
-                f"🔑 Access request: {service} ({rights}) — {label(entry['employee'])}. Why: "
-                f"{entry.get('reason', '')} Sent to the COO.")
+        opener = entry.get("opened_by") or ""
+        if fr:
+            sent = f" Demande ouverte par {opener} ; le COO s'en occupe." if opener else " Transmise au COO."
+            return (f"🔑 Demande d'accès : {service} ({rights}) — {label(entry['employee'])}. Pourquoi : "
+                    f"{entry.get('reason', '')}{sent}")
+        sent = f" Opened by {opener}; the COO handles it." if opener else " Sent to the COO."
+        return (f"🔑 Access request: {service} ({rights}) — {label(entry['employee'])}. Why: "
+                f"{entry.get('reason', '')}{sent}")
     if event == "escalated":
         what = (req.get("card") or {}).get("what", "")
         return (f"🔑 {service} : le COO demande au CEO de créer « {what} ». La carte attend dans la boîte 🔑."
