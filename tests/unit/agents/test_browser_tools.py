@@ -61,7 +61,7 @@ def office(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_the_keeper_types_a_login_on_its_site_only(office):
     item = vault.create_item("Scaleway — admin", url="https://console.scaleway.com/login", username="danny@photonet.app",
-                             by="CEO", generate_password=True)
+                             by="CEO", generate_password=True, holders=["00009"])  # the CEO lets the DSI use it
     out = await browser_tools.browser_fill_secret.ainvoke({"ref": "e2", "item_id": item["id"], "employee_id": "00009"})
     assert out["status"] == "filled" and "[hidden]" in out["page"]
     typed = office.filled[-1][2]
@@ -76,9 +76,26 @@ async def test_the_keeper_types_a_login_on_its_site_only(office):
     out = await browser_tools.browser_fill_secret.ainvoke({"ref": "e2", "item_id": item["id"], "employee_id": "00007"})
     assert out["status"] == "error" and len(office.filled) == 1
 
-    bare = vault.create_item("Sans adresse", by="CEO", password="x" * 12)
+    bare = vault.create_item("Sans adresse", by="CEO", password="x" * 12, holders=["00009"])
     out = await browser_tools.browser_fill_secret.ainvoke({"ref": "e2", "item_id": bare["id"], "employee_id": "00009"})
     assert out["status"] == "error" and "sign-in address" in out["message"]
+
+
+@pytest.mark.asyncio
+async def test_the_ceo_decides_which_of_their_logins_the_dsi_types(office):
+    from onemancompany.agents import vault_tools
+
+    ceo = vault.create_item("Qonto", url="https://app.qonto.com", by="CEO", password="q0nt0-p4ss")
+    own = vault.create_item("Scaleway — Le Diplomate", url="https://console.scaleway.com", by="DSI", password="s" * 20)
+    office.url = "https://app.qonto.com/signin"
+    out = await browser_tools.browser_fill_secret.ainvoke({"ref": "e2", "item_id": ceo["id"], "employee_id": "00009"})
+    assert out["status"] == "error" and not office.filled
+    refused = vault_tools.vault_grant.invoke({"item_id": ceo["id"], "target_employee_id": "00009", "reason": "x",
+                                             "employee_id": "00009"})
+    assert refused["status"] == "error" and "Only the CEO" in refused["message"]
+    office.url = "https://console.scaleway.com/login"  # what the DSI created, it may type
+    out = await browser_tools.browser_fill_secret.ainvoke({"ref": "e2", "item_id": own["id"], "employee_id": "00009"})
+    assert out["status"] == "filled" and office.filled[-1][2] == "s" * 20
 
 
 @pytest.mark.asyncio

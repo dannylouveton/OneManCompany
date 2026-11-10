@@ -106,6 +106,10 @@ def vault_grant(item_id: str, target_employee_id: str, reason: str, employee_id:
     """
     from onemancompany.core import vault
 
+    current = vault.get_item(item_id) or {}
+    if str(target_employee_id) == str(employee_id) and current and current.get("created_by") != vault.KEEPER:
+        return {"status": "error", "message": "Only the CEO can let you use a login they added (🔑 › Vault › Who "
+                                              "can use it). Ask them with vault_ask_ceo if you need it."}
     try:
         item = vault.grant(item_id, target_employee_id, by=_actor(employee_id), reason=reason)
     except ValueError as exc:

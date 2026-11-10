@@ -7741,7 +7741,107 @@ class AppController {
         ${people([])}
         <button class="pixel-btn small" onclick="window.app._vaultAdd()">${t('Add to the vault')}</button>
       </div>
+      <button class="pixel-btn small secondary mcp-add-btn" onclick="document.getElementById('vault-import').classList.toggle('hidden')">⇪ ${t('Import from another password manager')}</button>
+      <div id="vault-import" class="access-card ${this._vaultImport ? '' : 'hidden'}">
+        <div class="vault-intro">${t('Export your logins from your password manager, then choose the file here: 1Password (.1pux or CSV), Dashlane, Bitwarden, Proton Pass, KeePassXC, LastPass, Apple Passwords, Chrome, Edge, Firefox.')}</div>
+        <div class="mcp-hint">${t('The file is read in memory and never saved; you choose what goes in the vault. Delete the exported file afterwards: it holds your passwords in clear.')}</div>
+        <input type="file" class="vault-import-file" accept=".csv,.1pux,.zip,.txt" onchange="window.app._vaultImportRead(this)">
+        <div id="vault-import-preview"></div>
+      </div>
       ${items.length ? items.map(card).join('') : `<div class="access-empty">${t('The vault is empty')}</div>`}`;
+    if (this._vaultImport) this._renderVaultImport();
+  }
+
+  async _vaultImportRead(input) {
+    const file = input.files && input.files[0];
+    const box = document.getElementById('vault-import-preview');
+    if (!file || !box) return;
+    const form = new FormData();
+    form.append('file', file);
+    input.value = '';  // the page does not keep the file either
+    box.innerHTML = `<div class="access-empty">${this._escapeHtml(this._t('Reading…'))}</div>`;
+    let res, data;
+    try {
+      res = await fetch('/api/vault/import', { method: 'POST', body: form });
+      data = await res.json().catch(() => ({}));
+    } catch (e) {
+      res = { ok: false, status: 0 }; data = {};
+    }
+    if (!res.ok) {
+      box.innerHTML = '';
+      this._showToast(`${this._t('Error')}: ${this._t(data.detail || String(res.status))}`, 'error', 9000);
+      return;
+    }
+    this._vaultImport = data;
+    this._renderVaultImport();
+  }
+
+  _renderVaultImport() {
+    const data = this._vaultImport;
+    const box = document.getElementById('vault-import-preview');
+    if (!data || !box) return;
+    const esc = (v) => this._escapeHtml(v == null ? '' : String(v));
+    const t = (s) => esc(this._t(s));
+    const tags = (i) => [i.has_password ? t('password') : '', i.has_totp ? t('2FA') : '', i.has_note ? t('note') : '',
+      i.in_vault ? t('already in the vault') : ''].filter(Boolean).join(' · ');
+    box.innerHTML = `
+      <div class="vault-import-head"><b>${data.items.length}</b> ${t('logins found')} (${esc(data.format)})</div>
+      <div class="vault-import-filters">
+        <input type="text" class="vault-import-search" placeholder="${t('Filter: photonet, ovh…')}">
+        <select class="vault-import-folder"><option value="">${t('All folders')}</option>${(data.folders || []).map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}</select>
+        <label class="vault-generate"><input type="checkbox" class="vault-import-all"> ${t('Tick the ones shown')}</label>
+      </div>
+      <div class="vault-import-list">${data.items.map(i => `
+        <label class="vault-import-row" data-text="${esc([i.name, i.site, i.username, i.folder].join(' ').toLowerCase())}" data-folder="${esc(i.folder)}">
+          <input type="checkbox" value="${i.i}" ${i.in_vault ? 'disabled' : ''}>
+          <span class="vault-import-name">${esc(i.name)}</span>
+          <span class="mcp-hint">${esc(i.username)}${i.site ? ' · ' + esc(i.site) : ''}${i.folder ? ' · ' + esc(i.folder) : ''}</span>
+          <span class="perm-tag">${tags(i)}</span>
+        </label>`).join('')}</div>
+      <div class="mcp-hint">${t('Who can use them (the DSI types a login only on its own site)')}</div>
+      <div class="vault-people vault-import-people">${(this._vaultPeople || []).map(p => `<label><input type="checkbox" value="${esc(p.id)}"> ${esc(p.label)}</label>`).join('')}</div>
+      <div class="access-actions">
+        <button class="pixel-btn small vault-import-go">${t('Import the selection')} (<span class="vault-import-count">0</span>)</button>
+        <button class="pixel-btn small secondary vault-import-cancel">${t('Cancel')}</button>
+      </div>`;
+    const rows = Array.from(box.querySelectorAll('.vault-import-row'));
+    const search = box.querySelector('.vault-import-search');
+    const folder = box.querySelector('.vault-import-folder');
+    const count = () => { box.querySelector('.vault-import-count').textContent = box.querySelectorAll('.vault-import-list input:checked').length; };
+    const filter = () => {
+      const q = search.value.trim().toLowerCase();
+      const f = folder.value;
+      rows.forEach(r => {
+        const shown = (!q || r.dataset.text.includes(q)) && (!f || r.dataset.folder.split(' · ').includes(f));
+        r.style.display = shown ? '' : 'none';
+      });
+    };
+    search.oninput = filter;
+    folder.onchange = filter;
+    box.querySelector('.vault-import-all').onchange = (e) => {
+      rows.filter(r => r.style.display !== 'none').forEach(r => {
+        const c = r.querySelector('input');
+        if (!c.disabled) c.checked = e.target.checked;
+      });
+      count();
+    };
+    box.querySelector('.vault-import-list').onchange = count;
+    box.querySelector('.vault-import-cancel').onclick = async () => {
+      await fetch(`/api/vault/import/${encodeURIComponent(data.import_id)}`, { method: 'DELETE' }).catch(() => null);
+      this._vaultImport = null;
+      box.innerHTML = '';
+    };
+    box.querySelector('.vault-import-go').onclick = async () => {
+      const indices = Array.from(box.querySelectorAll('.vault-import-list input:checked')).map(c => Number(c.value));
+      if (!indices.length) { this._showToast(this._t('Tick the logins to import'), 'info'); return; }
+      const holders = Array.from(box.querySelectorAll('.vault-import-people input:checked')).map(c => c.value);
+      const out = await this._vaultCall(`/api/vault/import/${encodeURIComponent(data.import_id)}`, 'POST', { indices, holders });
+      if (!out) return;
+      this._vaultImport = null;
+      const extra = out.already_in_vault ? ` · ${out.already_in_vault} ${this._t('already in the vault')}` : '';
+      this._showToast(`${out.imported} ${this._t('logins imported')}${extra}. ${this._t('Delete the exported file now.')}`, 'success', 10000);
+      this._loadVault();
+    };
   }
 
   async _vaultCall(url, method, body) {

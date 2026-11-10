@@ -5718,6 +5718,43 @@ async def vault_add(body: dict) -> dict:
     return {"status": "ok", "item": item}
 
 
+@router.post("/api/vault/import")
+async def vault_import_start(file: UploadFile = File(...)) -> dict:
+    """The CEO brings logins from another password manager: read the export, list it without any value.
+
+    1Password (.1pux or CSV), Dashlane, Bitwarden, Proton Pass, KeePassXC, LastPass, Apple and the
+    browsers. The file stays in memory (never written); /api/vault/import/{id} keeps the chosen ones.
+    """
+    from onemancompany.core import vault_import
+
+    data = await file.read(vault_import.MAX_BYTES + 1)
+    try:
+        return vault_import.start(file.filename or "", data)
+    except (ValueError, KeyError, UnicodeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    finally:
+        del data
+
+
+@router.post("/api/vault/import/{import_id}")
+async def vault_import_finish(import_id: str, body: dict) -> dict:
+    """Put the chosen logins in the vault. Body: {indices: [...], holders?: [ids]}; the rest is forgotten."""
+    from onemancompany.core import vault_import
+
+    try:
+        return vault_import.finish(import_id, list(body.get("indices") or []), [str(h) for h in body.get("holders") or []])
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/api/vault/import/{import_id}")
+async def vault_import_cancel(import_id: str) -> dict:
+    from onemancompany.core import vault_import
+
+    vault_import.cancel(import_id)
+    return {"status": "ok"}
+
+
 @router.post("/api/vault/{item_id}/secret")
 async def vault_set_secret(item_id: str, body: dict) -> dict:
     """The CEO types a value (e.g. answering a request of the DSI). Body: {field, value}."""

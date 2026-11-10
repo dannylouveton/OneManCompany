@@ -35,6 +35,7 @@ from loguru import logger
 FILE_NAME = "vault.json"
 KEY_NAME = "OMC_VAULT_KEY"
 EVERYONE = "*"
+KEEPER = "DSI"  # how the DSI signs what it does in the vault
 KINDS = ("login", "note")
 FIELDS = ("password", "totp", "note")
 MAX_HISTORY = 200
@@ -363,15 +364,16 @@ def secret_values() -> list[str]:
 def use(item_id: str, field: str, *, employee_id: str, purpose: str = "", keeper: bool = False) -> str:
     """The value, for OneManCompany's code acting for an employee (e.g. filling a browser field).
 
-    ``keeper``: the DSI, who keeps the vault, may use any item (to create and
-    look after accounts); the browser still types it only on the item's site.
+    ``keeper``: the DSI, who keeps the vault, may also use the items it created
+    itself (the accounts it opens); the CEO's own logins only when the CEO lets
+    it (holders). The browser types a value only on the item's site.
     """
     if field not in FIELDS:
         raise ValueError(f"field must be one of {', '.join(FIELDS)}")
     with _lock:
         items = _load()
         item = _find(items, item_id)
-        if not keeper and not can_use(item, employee_id):
+        if not can_use(item, employee_id) and not (keeper and item.get("created_by") == KEEPER):
             raise PermissionError(f"{employee_id} may not use {item.get('name')!r}: ask the DSI (request_access)")
         token = (item.get("values") or {}).get(field)
         if not token:

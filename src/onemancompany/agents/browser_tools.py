@@ -153,8 +153,9 @@ async def browser_fill_secret(ref: str, item_id: str, field: str = "password", s
     """Type a value from the vault in a field: password, or the current 2FA code. Nobody sees it.
 
     Only on the vault item's own site (its sign-in address): on any other site
-    it is refused. For a new account, first add the login with vault_add_login
-    (it generates the password), then fill it here (and in the confirmation field).
+    it is refused. You may type the logins you created and those the CEO lets
+    you use. For a new account, first add the login with vault_add_login (it
+    generates the password), then fill it here (and in the confirmation field).
 
     Args:
         ref: The field's ref, e.g. "e7".
