@@ -26,6 +26,7 @@ def desk(tmp_path, monkeypatch):
     monkeypatch.setattr("onemancompany.agents.common_tools.load_employee", lambda e: people.get(e, {"name": e}))
     monkeypatch.setattr(access_tools, "_fr", lambda: True)
     monkeypatch.setattr(access_desk, "_lang", lambda: "fr")
+    monkeypatch.setattr(access_desk, "post_to_thread", AsyncMock())
     return tmp_path
 
 
@@ -50,6 +51,9 @@ async def test_request_in_a_project_task_goes_to_the_coo_and_waits(desk, monkeyp
         "service": "Scalingo", "reason": "vérifier les sauvegardes", "kind": "cli",
         "blocked": "test de restauration", "employee_id": "00007"})
     assert result["status"] == "requested" and "End your turn" in result["message"]
+    access_desk.post_to_thread.assert_awaited_once()  # the request shows in the project thread
+    assert access_desk.post_to_thread.await_args.args[0] == "p1/iter_001"
+    assert "Demande d'accès : Scalingo" in access_desk.post_to_thread.await_args.args[2]
     assert dispatched[0]["target_employee_id"] == "00003" and dispatched[0]["title"] == "Accès : Scalingo"
     assert "grant_access" in dispatched[0]["description"] and "escalate_access_request" in dispatched[0]["description"]
     req = access_desk.list_requests()[0]
@@ -69,15 +73,16 @@ async def test_validation(desk, monkeypatch):
     assert result["status"] == "error"
 
 
-def test_coo_escalates_and_its_task_waits(desk, monkeypatch):
-    req, _ = access_desk.submit("00007", "n8n", "voir les exécutions en erreur")
+@pytest.mark.asyncio
+async def test_coo_escalates_and_its_task_waits(desk, monkeypatch):
+    req, _ = access_desk.submit("00007", "n8n", "voir les exécutions en erreur", project_id="p1/iter_001")
     node = _task_node("n_coo")
     monkeypatch.setattr(access_tools, "_task_context", lambda: ("/x/task_tree.yaml", "p1/iter_001", node))
     monkeypatch.setattr("onemancompany.core.task_tree.save_tree_async", lambda path: None)
-    bad = access_tools.escalate_access_request.invoke({
+    bad = await access_tools.escalate_access_request.ainvoke({
         "request_id": req["id"], "what_to_create": "Une clé d'API n8n", "why": "erreurs", "auth": "weird"})
     assert bad["status"] == "error"
-    out = access_tools.escalate_access_request.invoke({
+    out = await access_tools.escalate_access_request.ainvoke({
         "request_id": req["id"], "what_to_create": "Une clé d'API n8n", "why": "Le Diplomate surveille les erreurs",
         "minimal_rights": "lecture", "base_url": "https://n8n.example.com/api/v1",
         "auth": "header:X-N8N-API-KEY:{key}", "employee_id": "00003"})
@@ -85,6 +90,8 @@ def test_coo_escalates_and_its_task_waits(desk, monkeypatch):
     assert node.hold_reason == f"access_request={req['id']},no_watchdog=1"
     card = access_desk.get_request(req["id"])["card"]
     assert card["setup"]["auth_name"] == "X-N8N-API-KEY" and card["by"] == "COO"
+    posted = access_desk.post_to_thread.await_args.args
+    assert posted[0] == "p1/iter_001" and "boîte" in posted[2]  # the card is announced in the project thread
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ def desk(tmp_path, monkeypatch):
               "00006": {"nickname": "Le Héron", "role": "Support"}}
     monkeypatch.setattr("onemancompany.core.store.load_employee", lambda e: people.get(e, {}))
     monkeypatch.setattr(access_desk, "_lang", lambda: "fr")
+    monkeypatch.setattr(access_desk, "post_to_thread", AsyncMock())
     return tmp_path
 
 
@@ -212,3 +213,77 @@ async def test_reconcile_resumes_tasks_waiting_on_a_request_decided_elsewhere(de
     with patch("onemancompany.core.vessel.employee_manager", empty):
         assert await access_desk.reconcile() == 0
     empty.resume_held_task.assert_not_awaited()
+
+
+
+def _tree_with_waiting_task(tmp_path):
+    """A project tree: the Diplomate's task waits for the COO's access task (its child)."""
+    from onemancompany.core.task_lifecycle import NodeType, TaskPhase
+    from onemancompany.core.task_tree import TaskTree
+
+    tree = TaskTree(project_id="p1/iter_001")
+    root = tree.create_root(employee_id="00001", description="Projet")
+    root.node_type = NodeType.CEO_PROMPT
+    asker = tree.add_child(parent_id=root.id, employee_id="00007", description="Vérifier les sauvegardes",
+                           acceptance_criteria=[])
+    asker.set_status(TaskPhase.PROCESSING)
+    asker.set_status(TaskPhase.HOLDING)
+    asker.result = "__HOLDING:awaiting_children,no_watchdog=1\nJ'attends l'accès Scalingo."
+    asker.hold_reason = "awaiting_children,no_watchdog=1"
+    coo = tree.add_child(parent_id=asker.id, employee_id="00003", description="Access request …", acceptance_criteria=[])
+    coo.set_status(TaskPhase.PROCESSING)
+    coo.set_status(TaskPhase.COMPLETED)
+    path = tmp_path / "proj" / "task_tree.yaml"
+    path.parent.mkdir(parents=True)
+    return tree, asker, coo, str(path)
+
+
+@pytest.mark.asyncio
+async def test_decision_resumes_the_same_task_without_review(desk, tmp_path, monkeypatch):
+    from onemancompany.core.task_lifecycle import TaskPhase
+    from onemancompany.core.vessel import ScheduleEntry, employee_manager
+
+    tree, asker, coo, path = _tree_with_waiting_task(tmp_path)
+    req, _ = access_desk.submit("00007", "Scalingo", "sauvegardes", kind="cli", blocked="test de restauration",
+                                task_id=asker.id, project_id="p1/iter_001", tree_path=path)
+    access_desk.set_coo_node(req["id"], "00007", coo.id)
+    tool_id = api_tools.create_api_tool("Scalingo", "", KEY, cli={"preset": "scalingo"})
+    access_desk.grant(req["id"], "00007", tool_id, access="read")
+    assert access_desk.is_access_node(coo.id) and not access_desk.is_access_node(asker.id)
+
+    scheduled = []
+    monkeypatch.setattr("onemancompany.core.task_tree.save_tree_async", lambda p: None)
+    monkeypatch.setattr(employee_manager, "schedule_node", lambda emp, nid, p: scheduled.append((emp, nid)))
+    monkeypatch.setattr(employee_manager, "_schedule_next", lambda emp: None)
+    monkeypatch.setattr(employee_manager, "_publish_node_update", lambda emp, node: None)
+    monkeypatch.setattr(employee_manager, "_log_node", lambda *a, **k: None)
+    await employee_manager._on_access_decided(tree, coo, asker, ScheduleEntry(node_id=coo.id, tree_path=path))
+
+    assert coo.status == TaskPhase.FINISHED.value  # accepted without a review round
+    assert asker.status == TaskPhase.PENDING.value and asker.hold_reason == ""
+    assert scheduled == [("00007", asker.id)]  # the same task goes back to the Diplomate
+    assert asker.result.startswith("J'attends l'accès Scalingo.")
+    assert "[Accès décidé" in asker.result and "run_cli" in asker.result and "test de restauration" in asker.result
+    assert access_desk.get_request(req["id"])["requesters"][0]["delivered_at"]
+
+
+@pytest.mark.asyncio
+async def test_task_left_waiting_is_resumed_by_reconcile(desk, tmp_path, monkeypatch):
+    from onemancompany.core.task_lifecycle import TaskPhase
+    from onemancompany.core.vessel import employee_manager
+
+    tree, asker, coo, path = _tree_with_waiting_task(tmp_path)
+    coo.set_status(TaskPhase.ACCEPTED)
+    coo.set_status(TaskPhase.FINISHED)
+    req, _ = access_desk.submit("00007", "GitHub", "CI", task_id=asker.id, project_id="p1/iter_001", tree_path=path)
+    access_desk.set_coo_node(req["id"], "00007", coo.id)
+    access_desk.refuse(req["id"], "00007", "pas maintenant", by="EA")
+    monkeypatch.setattr("onemancompany.core.task_tree.get_tree", lambda p: tree)
+    (tmp_path / "proj" / "task_tree.yaml").write_text("x")
+    reruns = []
+    monkeypatch.setattr(employee_manager, "rerun_waiting_task",
+                        lambda t, node, p, note: reruns.append((node.id, note)) or True)
+    monkeypatch.setattr(employee_manager, "_schedule", {})
+    assert await access_desk.reconcile() == 1
+    assert reruns[0][0] == asker.id and "pas maintenant" in reruns[0][1]
+    assert await access_desk.reconcile() == 0  # delivered once

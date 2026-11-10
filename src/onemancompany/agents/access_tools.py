@@ -120,11 +120,12 @@ def _coo_brief(req: dict, employee_id: str) -> str:
         "You run the access desk (see \"Access desk\" in your role guide). Decide for this employee:\n"
         f"1. The company already has it (a tool above, list_company_apis, list_tools): "
         f"grant_access(request_id=\"{rid}\", target_employee_id=\"{emp}\", tool_id=..., access=\"read\" or \"write\") "
-        "with the minimum rights; then finish with the one line it returns, for the employee.\n"
+        "with the minimum rights; then finish with the one line it returns. The employee then carries on with "
+        "their task by themselves (no review needed).\n"
         f"2. Only the CEO can create it (key, token, account, invitation): escalate_access_request(request_id=\"{rid}\", "
         "what_to_create=..., why=..., minimal_rights=..., preset=... or base_url/auth/cli). Write the card in the "
-        "CEO's language; the CEO should only have to paste the key. Then end your turn: you are resumed when the "
-        "CEO has answered.\n"
+        "CEO's language; the CEO should only have to paste the key. Then end your turn: this task waits and ends "
+        "by itself when the CEO answers, and the employee carries on.\n"
         f"3. Not justified for this work: refuse_access(request_id=\"{rid}\", target_employee_id=\"{emp}\", reason=...).\n"
         "Never ask the CEO in chat for keys and never handle keys yourself."
     )
@@ -144,9 +145,10 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
     receive keys: once granted, use api_request() for an API or run_cli() for
     a command-line tool. Check list_company_apis() first.
 
-    Inside a task, end your turn right after this call: you are resumed with
-    the decision (accept it, then continue the blocked work). Outside a task,
-    the decision arrives as a new task.
+    Everything stays in the project you are working on (its thread shows the
+    request and the decision). Inside a task, end your turn right after this
+    call: the same task comes back to you with the decision and you carry on
+    from where you stopped. Outside a project, the decision arrives as a new task.
 
     Args:
         service: What you need, e.g. "Scalingo", "GitHub id_picture", "n8n", "Telegram bot".
@@ -180,9 +182,11 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
                     "message": "This request is already with the COO. End your turn: you will be resumed with the decision."}
     try:
         req, _created = access_desk.submit(employee_id, service, reason, access=access, kind=kind, blocked=blocked,
-                                           task_id=node.id if node is not None else "", project_id=project_id)
+                                           task_id=node.id if node is not None else "", project_id=project_id,
+                                           tree_path=tree_path)
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
+    entry = next(q for q in req["requesters"] if q["employee"] == str(employee_id))
 
     if str(employee_id) in (COO_ID, EA_ID, CEO_ID):
         return {"status": "recorded", "request_id": req["id"],
@@ -202,9 +206,10 @@ async def request_access(service: str, reason: str, access: str = "read", kind: 
         })
         if result.get("status") in ("dispatched", "dispatched_waiting") and result.get("node_id"):
             access_desk.set_coo_node(req["id"], employee_id, result["node_id"])
+            await access_desk.post_to_thread(project_id, employee_id, access_desk.thread_text("requested", req, entry))
             return {"status": "requested", "request_id": req["id"], "to": COO_ID,
-                    "message": "Sent to the COO. End your turn now: you will be resumed with the decision "
-                               "(accept it, then carry on with the blocked work)."}
+                    "message": "Sent to the COO, in this project. End your turn now: this same task comes back "
+                               "to you with the decision, and you carry on from where you stopped."}
         logger.warning("[access] dispatch to COO failed ({}), sending as a separate task", result.get("message"))
 
     from onemancompany.api.routes import _push_adhoc_task
@@ -335,7 +340,7 @@ def _hold_current_task(request_id: str) -> bool:
 
 
 @tool
-def escalate_access_request(request_id: str, what_to_create: str, why: str, minimal_rights: str = "",
+async def escalate_access_request(request_id: str, what_to_create: str, why: str, minimal_rights: str = "",
                             where_url: str = "", preset: str = "", base_url: str = "", auth: str = "",
                             docs_url: str = "", cli: str = "", existing_tool_id: str = "",
                             allowed_writes: list[str] | None = None, deliverable: str = "key",
@@ -382,9 +387,14 @@ def escalate_access_request(request_id: str, what_to_create: str, why: str, mini
                              allowed_writes=allowed_writes, by=_actor(employee_id))
     except ValueError as exc:
         return {"status": "error", "message": str(exc)}
+    req = access_desk.get_request(request_id) or {}
+    for project_id, emp in {(q.get("project_id", ""), q["employee"]) for q in req.get("requesters") or []
+                            if q.get("status") == "validated"}:
+        await access_desk.post_to_thread(project_id, emp, access_desk.thread_text("escalated", req))
     if _hold_current_task(request_id):
         return {"status": "sent_to_ceo", "request_id": request_id,
-                "message": "Card sent to the CEO. End your turn now: your task resumes when the CEO has answered."}
+                "message": "Card sent to the CEO. End your turn now: this task waits and ends by itself when the "
+                           "CEO answers; the employee then carries on with their task."}
     return {"status": "sent_to_ceo", "request_id": request_id,
             "message": "Card sent to the CEO. The employees will be told when the CEO answers; you can finish."}
 

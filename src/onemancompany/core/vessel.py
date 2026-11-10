@@ -2187,6 +2187,80 @@ class EmployeeManager:
         return False
 
     # ------------------------------------------------------------------
+    # Access desk: carry on with the task that asked for an access
+    # ------------------------------------------------------------------
+
+    def rerun_waiting_task(self, tree, node, tree_path: str, note: str) -> bool:
+        """Put a waiting (HOLDING) task back in its employee's queue, with a note.
+
+        The employee picks up the same task in the same project (same session)
+        and reads the note, e.g. the access they were waiting for is granted.
+        If other children are still running, the task waits again afterwards.
+        """
+        from onemancompany.core.task_tree import save_tree_async
+
+        if node.status != TaskPhase.HOLDING.value:
+            return False
+        node.load_content(Path(tree_path).parent)
+        base = node.result or ""
+        if base.startswith("__HOLDING:"):
+            base = base.split("\n", 1)[1] if "\n" in base else ""
+        node.result = (base.rstrip() + "\n\n" if base.strip() else "") + note
+        still_running = [c for c in tree.get_active_children(node.id)
+                         if c.node_type not in SYSTEM_NODE_TYPES and TaskPhase(c.status) not in RESOLVED]
+        node.hold_reason = "awaiting_children,no_watchdog=1" if still_running else ""
+        node.set_status(TaskPhase.BLOCKED)   # HOLDING → BLOCKED → PENDING: valid path back to the queue
+        node.set_status(TaskPhase.PENDING)
+        save_tree_async(tree_path)
+        self._publish_node_update(node.employee_id, node)
+        self.schedule_node(node.employee_id, node.id, tree_path)
+        self._schedule_next(node.employee_id)
+        self._log_node(node.employee_id, node.id, "access_resume", note[:300])
+        logger.info("[access-desk] task {} of {} back in the queue (access decided)", node.id, node.employee_id)
+        return True
+
+    async def _rerun_when_waiting(self, tree_path: str, node_id: str, note: str, attempts: int = 120) -> None:
+        """The asking employee is still in its first turn: resume it once it waits."""
+        from onemancompany.core.task_tree import get_tree, get_tree_lock
+
+        for _ in range(attempts):
+            await asyncio.sleep(5)
+            tree = get_tree(tree_path)
+            node = tree.get_node(node_id)
+            if node is None:
+                return
+            if node.status == TaskPhase.HOLDING.value:
+                with get_tree_lock(tree_path):
+                    self.rerun_waiting_task(tree, node, tree_path, note)
+                return
+            if node.status != TaskPhase.PROCESSING.value:
+                break
+        logger.warning("[access-desk] task {} did not wait for its access decision", node_id)
+
+    async def _on_access_decided(self, tree, node, parent_node, entry: ScheduleEntry) -> None:
+        """The COO's access task is over: accept it and resume the employee who asked."""
+        from onemancompany.core import access_desk
+        from onemancompany.core.task_tree import save_tree_async
+
+        if node.status == TaskPhase.COMPLETED.value:
+            node.set_status(TaskPhase.ACCEPTED)
+            node.acceptance_result = {"passed": True, "notes": "Access decision (access desk): no review needed."}
+            node.set_status(TaskPhase.FINISHED)
+            save_tree_async(entry.tree_path)
+            self._publish_node_update(node.employee_id, node)
+        node.load_content(Path(entry.tree_path).parent)
+        decision = access_desk.decision_for_node(node.id) or (node.result or "")
+        note = access_desk.resume_note(decision)
+        if parent_node.status == TaskPhase.HOLDING.value:
+            self.rerun_waiting_task(tree, parent_node, entry.tree_path, note)
+        elif parent_node.status == TaskPhase.PROCESSING.value:
+            asyncio.get_running_loop().create_task(self._rerun_when_waiting(entry.tree_path, parent_node.id, note))
+        else:  # the employee did not wait: tell them directly
+            from onemancompany.api.routes import _push_adhoc_task
+
+            _push_adhoc_task(parent_node.employee_id, note)
+
+    # ------------------------------------------------------------------
     # Task history management
     # ------------------------------------------------------------------
 
@@ -2700,6 +2774,17 @@ class EmployeeManager:
         if parent_node and parent_node.is_ceo_node:
             logger.debug("[ON_CHILD_COMPLETE] parent {} is CEO node — skipping review/auto-complete", parent_node.id)
             parent_node = None  # Skip propagation, fall through to project completion check
+
+        # --- Access desk: an access decision is not work to review ---
+        # The COO's task for an employee's access request ends when access is
+        # granted or refused: accept it and let that employee carry on with
+        # the very task that asked (no review round, no false deadlock).
+        if parent_node and node.node_type not in SYSTEM_NODE_TYPES:
+            from onemancompany.core import access_desk
+
+            if access_desk.is_access_node(node.id):
+                await self._on_access_decided(tree, node, parent_node, entry)
+                return
 
         # --- Auto-accept orphaned COMPLETED children after REVIEW finishes ---
         # MUST run BEFORE Gate 1/Gate 2 to prevent review spawn loop:

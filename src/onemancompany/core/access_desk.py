@@ -230,7 +230,7 @@ def _clean_access(access: str) -> str:
 
 
 def submit(employee_id: str, service: str, reason: str, *, access: str = "read", kind: str = "api",
-           blocked: str = "", task_id: str = "", project_id: str = "") -> tuple[dict, bool]:
+           blocked: str = "", task_id: str = "", project_id: str = "", tree_path: str = "") -> tuple[dict, bool]:
     """Record a request (or join the open one for this service). Returns (request, created)."""
     service = " ".join(str(service or "").split())[:80]
     reason = str(reason or "").strip()[:2000]
@@ -242,7 +242,7 @@ def submit(employee_id: str, service: str, reason: str, *, access: str = "read",
     kind = kind if kind in KINDS else "other"
     emp = str(employee_id)
     fields = {"reason": reason, "access": access, "kind": kind, "blocked": str(blocked or "").strip()[:1000],
-              "task_id": task_id, "project_id": project_id, "requested_at": _now()}
+              "task_id": task_id, "project_id": project_id, "tree_path": tree_path, "requested_at": _now()}
     with _lock:
         items = _load()
         key = service_key(service)
@@ -260,7 +260,7 @@ def submit(employee_id: str, service: str, reason: str, *, access: str = "read",
         else:
             if entry.get("access") == "write":
                 fields["access"] = "write"  # never downgrade an earlier write request
-            entry.update(fields, status="new", coo_node="", decided_at="", decided_by="", note="")
+            entry.update(fields, status="new", coo_node="", decided_at="", decided_by="", note="", delivered_at="")
         _history(req, emp, "requested", f"{access}: {reason}")
         _save(items)
         out = copy.deepcopy(req)
@@ -274,6 +274,81 @@ def set_coo_node(request_id: str, employee_id: str, node_id: str) -> None:
         req = _find(items, request_id)
         _requester(req, employee_id)["coo_node"] = node_id
         _save(items)
+
+
+def _entry_for_node(node_id: str) -> tuple[dict, dict] | tuple[None, None]:
+    """(request, requester entry) whose COO task is ``node_id``."""
+    if not node_id:
+        return None, None
+    with _lock:
+        for req in _load():
+            for entry in req.get("requesters") or []:
+                if entry.get("coo_node") == node_id:
+                    return copy.deepcopy(req), copy.deepcopy(entry)
+    return None, None
+
+
+def is_access_node(node_id: str) -> bool:
+    """True if this task is the COO handling an employee's access request."""
+    return _entry_for_node(node_id)[0] is not None
+
+
+def decision_for_node(node_id: str) -> str:
+    """What the asking employee reads once the COO task ``node_id`` is over ("" if undecided)."""
+    req, entry = _entry_for_node(node_id)
+    if not req or entry.get("status") not in ("granted", "refused"):
+        return ""
+    mark_delivered(req["id"], entry["employee"])
+    return outcome_text(req, entry)
+
+
+def resume_note(decision: str) -> str:
+    head = ("[Accès décidé — reprends cette tâche là où tu en étais]" if _lang() == "fr"
+            else "[Access decided — carry on with this task where you left it]")
+    return f"{head}\n{decision}".strip()
+
+
+def mark_delivered(request_id: str, employee_id: str) -> None:
+    with _lock:
+        items = _load()
+        req = next((r for r in items if r.get("id") == request_id), None)
+        entry = next((q for q in (req or {}).get("requesters") or [] if q.get("employee") == str(employee_id)), None)
+        if entry is not None and not entry.get("delivered_at"):
+            entry["delivered_at"] = _now()
+            _save(items)
+
+
+async def post_to_thread(project_id: str, employee_id: str, text: str) -> None:
+    """Write in the discussion thread of the project the request comes from."""
+    from onemancompany.core.conversation import get_conversation_service
+    from onemancompany.core.task_lifecycle import is_system_project_id
+
+    if not project_id or is_system_project_id(project_id):
+        return
+    try:
+        service = get_conversation_service()
+        conv = await service.get_or_create_project_conversation(project_id, [str(employee_id)])
+        await service.push_system_message(conv.id, text, source_employee=str(employee_id))
+    except Exception as exc:
+        logger.warning("[access-desk] cannot write in the thread of {}: {}", project_id, exc)
+
+
+def thread_text(event: str, req: dict, entry: dict | None = None) -> str:
+    """Short lines for the project thread: request, card for the CEO, decision."""
+    fr = _lang() == "fr"
+    service = req.get("service", "")
+    if event == "requested" and entry:
+        rights = (("lecture seule" if entry.get("access") == "read" else "lecture et écriture") if fr
+                  else ("read-only" if entry.get("access") == "read" else "read and write"))
+        return (f"🔑 Demande d'accès : {service} ({rights}) — {label(entry['employee'])}. Pourquoi : "
+                f"{entry.get('reason', '')} Transmise au COO." if fr else
+                f"🔑 Access request: {service} ({rights}) — {label(entry['employee'])}. Why: "
+                f"{entry.get('reason', '')} Sent to the COO.")
+    if event == "escalated":
+        what = (req.get("card") or {}).get("what", "")
+        return (f"🔑 {service} : le COO demande au CEO de créer « {what} ». La carte attend dans la boîte 🔑."
+                if fr else f"🔑 {service}: the COO asked the CEO to create \"{what}\". The card is in the 🔑 box.")
+    return "🔑 " + outcome_text(req, entry or {})
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +674,7 @@ async def notify_requesters(req: dict, employees: list[str] | None = None) -> li
         if entry.get("status") not in ("granted", "refused"):
             continue
         text = outcome_text(req, entry)
+        await post_to_thread(entry.get("project_id", ""), emp, "🔑 " + text)
         node = entry.get("coo_node") or ""
         resumed = False
         if node:
@@ -614,6 +690,7 @@ async def notify_requesters(req: dict, employees: list[str] | None = None) -> li
             from onemancompany.api.routes import _push_adhoc_task
 
             _push_adhoc_task(emp, text)
+            mark_delivered(req["id"], emp)
         told.append(emp)
     return told
 
@@ -629,23 +706,48 @@ async def reconcile() -> int:
     from onemancompany.core.vessel import employee_manager
 
     scheduled = {e.node_id for e in employee_manager._schedule.get(COO_ID, [])}
-    if not scheduled:
-        return 0
     resumed = 0
     with _lock:
         items = [copy.deepcopy(r) for r in _load()]
     for req in items:
         for entry in req.get("requesters") or []:
+            if entry.get("status") not in ("granted", "refused"):
+                continue
             node = entry.get("coo_node") or ""
-            if node in scheduled and entry.get("status") in ("granted", "refused"):
+            if node in scheduled:
                 try:
                     if await employee_manager.resume_held_task(COO_ID, node, outcome_text(req, entry)):
                         resumed += 1
+                        await post_to_thread(entry.get("project_id", ""), entry["employee"],
+                                             "🔑 " + outcome_text(req, entry))
                         logger.info("[access-desk] resumed COO task {} ({} for {})", node, req["service"],
                                     entry.get("employee"))
+                        continue
                 except Exception as exc:
                     logger.warning("[access-desk] cannot resume COO task {}: {}", node, exc)
+            if _resume_left_waiting(req, entry):
+                resumed += 1
     return resumed
+
+
+def _resume_left_waiting(req: dict, entry: dict) -> bool:
+    """The COO task is over but the employee who asked is still waiting (e.g. after a restart)."""
+    from onemancompany.core.task_lifecycle import RESOLVED, TaskPhase
+    from onemancompany.core.task_tree import get_tree, get_tree_lock
+    from onemancompany.core.vessel import employee_manager
+
+    tree_path, task_id, node_id = entry.get("tree_path"), entry.get("task_id"), entry.get("coo_node")
+    if entry.get("delivered_at") or not (tree_path and task_id and node_id) or not Path(tree_path).exists():
+        return False
+    tree = get_tree(tree_path)
+    waiting, coo = tree.get_node(task_id), tree.get_node(node_id)
+    if waiting is None or waiting.status != TaskPhase.HOLDING.value or (coo and TaskPhase(coo.status) not in RESOLVED):
+        return False
+    with get_tree_lock(tree_path):
+        done = employee_manager.rerun_waiting_task(tree, waiting, tree_path, resume_note(outcome_text(req, entry)))
+    if done:
+        mark_delivered(req["id"], entry["employee"])
+    return done
 
 
 def _node_running(node_id: str) -> bool:
