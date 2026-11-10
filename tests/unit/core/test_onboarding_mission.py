@@ -64,4 +64,16 @@ async def test_force_runs_everything(emp_dir, monkeypatch):
     monkeypatch.setattr(om, "launch_mission", fake_launch)
     monkeypatch.setattr(om, "start_weekly", lambda emp: {"status": "ok"})
     result = await om.onboard("00007", force=True)
-    assert result["charter"] is True and result["mission"]["status"] == "launched" and result["weekly"] == "ok"
+    assert result["charter"] is True and result["mission"]["status"] == "launched"
+    # The weekly round is the employee's own initiative unless the company imposes it
+    assert "weekly" not in result
+
+
+@pytest.mark.asyncio
+async def test_arrival_note_assigns_nothing_from_the_top(emp_dir, monkeypatch):
+    pushed = []
+    monkeypatch.setattr("onemancompany.api.routes._push_adhoc_task", lambda emp, desc, *a, **k: pushed.append((emp, desc)) or "n1")
+    monkeypatch.setattr("onemancompany.core.store.load_employee", lambda e: {"nickname": "Le Diplomate", "role": "SRE"})
+    result = await om.launch_mission("00007", "Scalingo")
+    assert result == {"status": "launched", "node_id": "n1"}
+    assert pushed[0][0] == "00007" and "Le Diplomate" in pushed[0][1] and "Scalingo" in pushed[0][1]

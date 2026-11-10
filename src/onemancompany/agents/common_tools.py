@@ -1459,6 +1459,63 @@ async def report_to_ceo(message: str, employee_id: str = "") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Reporting up the hierarchy
+# ---------------------------------------------------------------------------
+
+_SALES_WORDS = ("sales", "market", "vente", "commercial", "client success", "growth", "partenariat")
+_HR_WORDS = ("human resource", "ressources humaines", "recrut", "talent")
+
+
+def manager_of(employee_id: str) -> str:
+    """Who an employee reports to: their O-level executive, the EA, then the CEO."""
+    from onemancompany.core.config import CEO_ID, CSO_ID, EA_ID
+
+    if employee_id in (EA_ID, CEO_ID):
+        return CEO_ID
+    if employee_id in (HR_ID, COO_ID, CSO_ID):
+        return EA_ID
+    emp = load_employee(employee_id) or {}
+    area = f"{emp.get('department', '')} {emp.get('role', '')}".lower()
+    if area.strip() in ("hr", "rh") or any(w in area for w in _HR_WORDS):
+        return HR_ID
+    if any(w in area for w in _SALES_WORDS):
+        return CSO_ID
+    return COO_ID
+
+
+@tool
+async def report_up(message: str, employee_id: str = "") -> dict:
+    """Report to your manager — the normal way to share what you did, found or plan.
+
+    It goes one level up the hierarchy (employee → their director → executive
+    assistant → CEO). Each level reads it, acts on what concerns them and
+    passes on only what the next level needs. Use this rather than writing to
+    the CEO directly.
+
+    Args:
+        message: A short report: what you did, why, the result, what comes next.
+        employee_id: Your employee ID (auto-filled).
+    """
+    if err := _validate_employee_id(employee_id):
+        return err
+    from onemancompany.core.config import CEO_ID
+
+    manager = manager_of(employee_id)
+    if manager == CEO_ID:
+        sent = await report_to_ceo.ainvoke({"message": message, "employee_id": employee_id})
+        return {"status": "sent", "to": CEO_ID, "channel": sent.get("channel")}
+
+    from onemancompany.api.routes import _push_adhoc_task
+
+    _push_adhoc_task(manager, (
+        f"Report from {_employee_label(employee_id)}, who reports to you:\n\n{message.strip()}\n\n"
+        "Read it and act on what concerns you. Then pass on to your own manager, with report_up, "
+        "only what they need to know, in a few lines — or nothing if nothing needs to go up."
+    ))
+    return {"status": "sent", "to": manager}
+
+
+# ---------------------------------------------------------------------------
 # Multiple-choice questions to the CEO (like "Ask questions" in Claude)
 # ---------------------------------------------------------------------------
 
@@ -2030,7 +2087,7 @@ def _register_all_internal_tools() -> None:
         # Formerly gated — now available to all employees
         bash, use_tool, set_project_budget,
         set_cron, stop_cron_job, setup_webhook, remove_webhook,
-        list_automations, notify_ceo, report_to_ceo, ask_ceo,
+        list_automations, notify_ceo, report_to_ceo, ask_ceo, report_up,
         start_background_task, check_background_task, stop_background_task,
         list_background_tasks, request_api_key,
     ]

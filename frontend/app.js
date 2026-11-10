@@ -3666,7 +3666,7 @@ class AppController {
     if (['00001', '00002', '00003', '00004', '00005'].includes(empId)) return;
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:3px;';
-    row.innerHTML = '<button class="pixel-btn small secondary">Launch onboarding mission</button>';
+    row.innerHTML = '<button class="pixel-btn small secondary">Start onboarding</button>';
     const btn = row.querySelector('button');
     btn.addEventListener('click', async () => {
       btn.disabled = true;
@@ -3674,7 +3674,7 @@ class AppController {
         const resp = await fetch(`/api/employee/${empId}/onboarding-mission`, { method: 'POST' });
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok) throw new Error(data.detail || resp.status);
-        this._showToast(this._t('Onboarding mission launched'), 'success');
+        this._showToast(this._t('Onboarding started'), 'success');
       } catch (e) {
         this._showToast('Failed: ' + e.message, 'error');
         btn.disabled = false;

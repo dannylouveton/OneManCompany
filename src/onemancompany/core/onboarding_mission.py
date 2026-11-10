@@ -4,10 +4,11 @@ At hire (or on demand for someone already on the team):
 
 * the **onboarding charter** (company rule ``onboarding_charter``) is added to
   the employee's work principles, which are injected into every task;
-* an **onboarding mission** project (company rule ``onboarding_mission``) is
-  assigned directly to them: map what exists, carry out quick wins, write a
-  roadmap and start it, report;
-* a **weekly improvement** scheduled task keeps the initiative going.
+* an **arrival note** (company rule ``onboarding_mission``) wakes them up:
+  nothing is assigned; like a top performer, they decide how to take up the
+  role, act, and report up the hierarchy (report_up);
+* the weekly improvement round is theirs to set up (set_cron); config can
+  still impose it with ``weekly: true``.
 
 Both texts live with the company rules, so the CEO can read and edit them.
 config.yaml::
@@ -15,7 +16,7 @@ config.yaml::
     onboarding:
       charter: true    # default
       mission: true    # default
-      weekly: true     # default
+      weekly: false    # default: the employee sets up their own round
 """
 
 from __future__ import annotations
@@ -47,7 +48,10 @@ def _settings() -> dict:
 
     cfg = load_app_config().get("onboarding")
     cfg = cfg if isinstance(cfg, dict) else {}
-    return {k: cfg.get(k, True) is not False for k in ("charter", "mission", "weekly")}
+    # The weekly round is the employee's own initiative (set_cron), not imposed.
+    return {"charter": cfg.get("charter", True) is not False,
+            "mission": cfg.get("mission", True) is not False,
+            "weekly": cfg.get("weekly", False) is True}
 
 
 def _lang() -> str:
@@ -90,52 +94,29 @@ def render_mission(template: str, values: dict[str, str]) -> str:
 
 
 async def launch_mission(employee_id: str, hire_context: str = "") -> dict:
-    """Create the onboarding mission project, assigned directly to the employee."""
-    from onemancompany.agents.tree_tools import _add_to_project_team
-    from onemancompany.core.config import CEO_ID, TASK_TREE_FILENAME
-    from onemancompany.core.conversation import get_conversation_service
-    from onemancompany.core.project_archive import create_iteration, create_named_project, get_project_dir
+    """Let the newcomer start: an arrival note, not an assignment.
+
+    Nothing is assigned from the top. The employee is woken up with the
+    "taking up the role" note (company rule ``onboarding_mission``): context
+    and the way top performers start. What to do is theirs to decide; results
+    go up the hierarchy with report_up.
+    """
+    from onemancompany.api.routes import _push_adhoc_task
+    from onemancompany.core.config import get_workspace_dir
     from onemancompany.core.store import load_employee
-    from onemancompany.core.task_lifecycle import NodeType, TaskPhase
-    from onemancompany.core.task_tree import TaskTree
-    from onemancompany.core.vessel import _save_project_tree, employee_manager
 
     template = _doc(MISSION_DOC)
     if not template:
         return {"status": "skipped", "reason": "no onboarding_mission rule"}
     emp = load_employee(employee_id) or {}
-    who = emp.get("nickname") or emp.get("name") or employee_id
-    lang = _lang()
-    project_name = _PROJECT_NAME[lang].format(who=who)
-    pid = create_named_project(project_name)
-    iter_id = create_iteration(pid, project_name, "pending")
-    pdir = get_project_dir(pid)
-    ctx_id = f"{pid}/{iter_id}" if iter_id else pid
-    mission = render_mission(template, {
-        "name": emp.get("name", ""), "nickname": who, "role": emp.get("role", ""),
-        "department": emp.get("department", ""), "context": hire_context.strip(),
-        "workspace": str(pdir),
+    note = render_mission(template, {
+        "name": emp.get("name", ""), "nickname": emp.get("nickname") or emp.get("name") or employee_id,
+        "role": emp.get("role", ""), "department": emp.get("department", ""),
+        "context": hire_context.strip(), "workspace": str(get_workspace_dir(employee_id)),
     })
-    mission += f"\n\n[Project ID: {ctx_id}] [Project workspace: {pdir}]"
-
-    tree = TaskTree(project_id=ctx_id, mode="simple")
-    root = tree.create_root(employee_id=CEO_ID, description=project_name)
-    root.node_type = NodeType.CEO_PROMPT
-    root.set_status(TaskPhase.PROCESSING)
-    node = tree.add_child(parent_id=root.id, employee_id=employee_id, description=mission,
-                          acceptance_criteria=[], title=project_name)
-    node.project_id = ctx_id
-    node.project_dir = str(pdir)
-    _save_project_tree(pdir, tree)
-    conv = await get_conversation_service().get_or_create_project_conversation(ctx_id, [CEO_ID, employee_id])
-    await get_conversation_service().push_system_message(conv.id, f"Project created: {project_name}",
-                                                         source_employee="system")
-    _add_to_project_team(pdir, CEO_ID)
-    _add_to_project_team(pdir, employee_id)
-    employee_manager.schedule_node(employee_id, node.id, str(Path(pdir) / TASK_TREE_FILENAME))
-    employee_manager._schedule_next(employee_id)
-    logger.info("[onboarding] mission {} launched for {}", ctx_id, employee_id)
-    return {"status": "launched", "project_id": pid, "project_dir": str(pdir)}
+    node_id = _push_adhoc_task(employee_id, note)
+    logger.info("[onboarding] arrival note sent to {} (node {})", employee_id, node_id)
+    return {"status": "launched", "node_id": node_id}
 
 
 def start_weekly(employee_id: str) -> dict:
@@ -146,7 +127,7 @@ def start_weekly(employee_id: str) -> dict:
 
 async def onboard(employee_id: str, hire_context: str = "", *, force: bool = False) -> dict:
     """Charter + mission + weekly round, as configured. Never raises."""
-    settings = {"charter": True, "mission": True, "weekly": True} if force else _settings()
+    settings = {**_settings(), "charter": True, "mission": True} if force else _settings()
     result: dict = {"employee_id": employee_id}
     try:
         if settings["charter"]:
