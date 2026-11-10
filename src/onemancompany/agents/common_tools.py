@@ -1673,47 +1673,23 @@ def _credential_env_key(service_name: str) -> str:
 
 @tool
 async def request_api_key(service_name: str, reason: str, employee_id: str = "") -> dict:
-    """Ask the CEO for access to an external service's API.
+    """Ask for access to an external service's API (same as request_access with kind="api").
 
-    You never receive API keys: the CEO adds the key as a company tool
-    (Tools panel › Add a tool › API key) and grants you access. You then call
-    the service with api_request() — the server adds the key for you.
+    You never receive API keys. The COO handles the request (access desk):
+    they grant an existing company key or ask the CEO to create one. You then
+    call the service with api_request() — the server adds the key for you.
     Check list_company_apis() first: access may already be granted.
 
     Args:
         service_name: The service name (e.g. "stripe", "intercom", "github").
-        reason: Why you need it — shown to the CEO.
+        reason: Why you need it — shown to the COO and the CEO.
         employee_id: Your employee ID (auto-filled).
     """
-    if err := _validate_employee_id(employee_id):
-        return err
+    from onemancompany.agents.access_tools import request_access
 
-    from onemancompany.core.api_tools import granted_apis
-
-    granted = [a for a in granted_apis(employee_id) if service_name.lower() in (a["api"] + a["name"]).lower()]
-    if granted:
-        return {
-            "status": "already_granted",
-            "apis": granted,
-            "message": "You already have access. Use api_request(api=..., method=..., path=...).",
-        }
-
-    notify_ceo.invoke({
-        "message": (
-            f"{employee_id} needs API access to {service_name}: {reason}. "
-            f"Add it in Tools › Add a tool › API key, then grant access to this employee."
-        ),
-        "urgency": "normal",
-        "employee_id": employee_id,
-    })
-    logger.info("[request_api_key] employee={} service={} (CEO notified, no key collected)", employee_id, service_name)
-    return {
-        "status": "requested",
-        "message": (
-            "The CEO has been asked to add this API in the Tools panel and grant you access. "
-            "Do not ask for the key in chat. Once granted, it appears in list_company_apis()."
-        ),
-    }
+    logger.info("[request_api_key] employee={} service={} → access desk", employee_id, service_name)
+    return await request_access.ainvoke({"service": service_name, "reason": reason, "access": "read",
+                                         "kind": "api", "employee_id": employee_id})
 
 
 # ---------------------------------------------------------------------------
@@ -2097,6 +2073,11 @@ def _register_all_internal_tools() -> None:
     # Company API keys, used through the relay (keys never reach employees)
     from onemancompany.agents.api_key_tools import API_KEY_TOOLS as _api_key_tools
     for t in _api_key_tools:
+        tool_registry.register(t, ToolMeta(name=t.name, category="base"))
+
+    # Access desk: anyone can ask; the COO decides (COO tools live with the COO)
+    from onemancompany.agents.access_tools import EMPLOYEE_ACCESS_TOOLS as _access_tools
+    for t in _access_tools:
         tool_registry.register(t, ToolMeta(name=t.name, category="base"))
 
     # Product management tools — available to all employees

@@ -5386,6 +5386,7 @@ def _mcp_section(tool_id: str, tool_data: dict) -> dict:
             "id": emp_id,
             "name": emp.get("name", emp_id),
             "nickname": emp.get("nickname", ""),
+            "role": emp.get("role", ""),
             "claude_code": str(hosting) in ("self", "HostingMode.SELF"),
             "granted": emp_id in allowed,
             "custom_actions": emp_id in personal,
@@ -5521,8 +5522,11 @@ def _api_key_section(tool_id: str, tool_data: dict) -> dict:
     from onemancompany.core.config import CEO_ID as _CEO
     from onemancompany.core.secret_store import get_secret_store, masked
 
+    from onemancompany.core import access_desk
+
     allowed = {str(u) for u in (tool_data.get("allowed_users") or [])}
     personal = tool_data.get("employee_rules") or {}
+    grants = tool_data.get("grants") or {}
     employees = []
     for emp_id, emp in sorted(_load_all().items()):
         if emp_id == _CEO:
@@ -5531,24 +5535,38 @@ def _api_key_section(tool_id: str, tool_data: dict) -> dict:
             "id": emp_id,
             "name": emp.get("name", emp_id),
             "nickname": emp.get("nickname", ""),
+            "role": emp.get("role", ""),
             "granted": emp_id in allowed,
+            "grant": grants.get(emp_id) if emp_id in allowed else None,
             "custom_rules": emp_id in personal,
             "rules": api_tools.effective_rules(tool_data, emp_id),
         })
     api = tool_data.get("api") or {}
     auth = api.get("auth") or {}
+    cli = tool_data.get("cli") or {}
+    requests = [{
+        "id": r["id"], "status": r["status"], "updated_at": r.get("updated_at", ""),
+        "what": (r.get("card") or {}).get("what", ""),
+        "requesters": [{"employee": q["employee"], "label": q.get("label"), "access": q.get("access"),
+                        "status": q.get("status"), "reason": q.get("reason"), "decided_by": q.get("decided_by", "")}
+                       for q in r.get("requesters") or []],
+    } for r in access_desk.requests_for_tool(tool_id)]
     return {
         "type": "api_key",
         "title": "API key",
         "tool_id": tool_id,
         "base_url": api.get("base_url", ""),
         "docs_url": api.get("docs_url", ""),
-        "auth": {"in": auth.get("in", "header"), "name": auth.get("name", ""), "format": auth.get("format", "")},
+        "auth": {"in": auth.get("in", "header"), "name": auth.get("name", ""), "format": auth.get("format", ""),
+                 "exchange": bool(auth.get("exchange"))},
+        "cli": {"command": cli.get("command", ""), "preset": cli.get("preset", "")} if cli else None,
         "key": masked(get_secret_store().get(tool_data.get("secret", ""))),
         "rules": api_tools.effective_rules({"rules": tool_data.get("rules")}, ""),
         "employees": employees,
         "pending": api_tools.list_pending(tool_id),
         "log": api_tools.read_log(tool_id, 30),
+        "requests": requests,
+        "history": list(reversed((tool_data.get("grant_history") or [])[-20:])),
     }
 
 
@@ -5612,6 +5630,94 @@ async def api_key_resolve(tool_id: str, req_id: str, decision: str) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"status": "ok", "request": item}
+
+
+# ── Access desk: the CEO's box of access requests prepared by the COO ─────────
+
+def _access_card(req: dict) -> dict:
+    from onemancompany.core import access_desk
+
+    card = req.get("card") or {}
+    setup = dict(card.get("setup") or {})
+    preset = setup.get("preset", "")
+    return {
+        "id": req["id"], "service": req["service"], "status": req["status"], "kinds": req.get("kinds") or [],
+        "created_at": req.get("created_at", ""), "updated_at": req.get("updated_at", ""),
+        "what": card.get("what", ""), "why": card.get("why", ""), "where_url": card.get("where_url", ""),
+        "rights": card.get("rights", ""), "deliverable": card.get("deliverable", "key"),
+        "existing_tool_id": card.get("tool_id", ""), "prepared_by": card.get("by", ""),
+        "setup": {
+            "preset": preset, "name": setup.get("name", ""), "base_url": setup.get("base_url", ""),
+            "auth_in": setup.get("auth_in", "header"), "auth_name": setup.get("auth_name", ""),
+            "auth_format": setup.get("auth_format", ""), "docs_url": setup.get("docs_url", ""),
+            "exchange": bool(setup.get("exchange")),
+            "cli": (setup.get("cli") or {}).get("command", ""),
+        },
+        "requesters": [{
+            "employee": q["employee"], "label": q.get("label") or access_desk.label(q["employee"]),
+            "access": q.get("access"), "kind": q.get("kind"), "status": q.get("status"),
+            "reason": q.get("reason", ""), "blocked": q.get("blocked", ""), "requested_at": q.get("requested_at", ""),
+        } for q in req.get("requesters") or []],
+        "resolution": req.get("resolution") or None,
+    }
+
+
+@router.get("/api/access-requests")
+async def access_requests_list(status: str = "waiting_ceo") -> dict:
+    """Access requests (default: the ones waiting for the CEO)."""
+    from onemancompany.core import access_desk
+
+    items = access_desk.list_requests(status)
+    waiting = len(items) if status == "waiting_ceo" else len(access_desk.waiting_for_ceo())
+    return {"requests": [_access_card(r) for r in items], "waiting_ceo": waiting}
+
+
+@router.post("/api/access-requests/{request_id}/provide")
+async def access_request_provide(request_id: str, body: dict) -> dict:
+    """The CEO pastes the key. Body: {key, setup?: {name, base_url, auth_in, auth_name, auth_format, docs_url}, note?}.
+
+    The key goes to the secret store (never returned); the employees validated
+    by the COO get access and their waiting tasks resume.
+    """
+    from onemancompany.agents.coo_agent import _load_assets_from_disk
+    from onemancompany.core import access_desk
+
+    overrides = {k: v for k, v in (body.get("setup") or {}).items()
+                 if k in ("name", "base_url", "auth_in", "auth_name", "auth_format", "docs_url") and v not in (None, "")}
+    try:
+        req, tool_id = access_desk.provide(request_id, str(body.get("key", "")), overrides=overrides,
+                                           note=str(body.get("note", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _load_assets_from_disk()
+    told = await access_desk.notify_requesters(req)
+    return {"status": "ok", "tool_id": tool_id, "told": told, "request": _access_card(req)}
+
+
+@router.post("/api/access-requests/{request_id}/done")
+async def access_request_done(request_id: str, body: dict) -> dict:
+    """The CEO did what was asked without a key to store. Body: {note?}."""
+    from onemancompany.core import access_desk
+
+    try:
+        req = access_desk.done_without_key(request_id, str(body.get("note", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    told = await access_desk.notify_requesters(req)
+    return {"status": "ok", "told": told, "request": _access_card(req)}
+
+
+@router.post("/api/access-requests/{request_id}/refuse")
+async def access_request_refuse(request_id: str, body: dict) -> dict:
+    """The CEO refuses. Body: {reason?}."""
+    from onemancompany.core import access_desk
+
+    try:
+        req = access_desk.refuse_by_ceo(request_id, str(body.get("reason", "")))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    told = await access_desk.notify_requesters(req)
+    return {"status": "ok", "told": told, "request": _access_card(req)}
 
 
 @router.delete("/api/apikeys/{tool_id}")

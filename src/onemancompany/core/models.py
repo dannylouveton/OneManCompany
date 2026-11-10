@@ -123,6 +123,7 @@ class EventType(str, Enum):
     OPEN_POPUP = "open_popup"
     REQUEST_CREDENTIALS = "request_credentials"
     CREDENTIALS_SUBMITTED = "credentials_submitted"
+    ACCESS_REQUEST_UPDATE = "access_request_update"
     CONVERSATION_PHASE = "conversation_phase"
     CONVERSATION_MESSAGE = "conversation_message"
     REMOTE_WORKER_REGISTERED = "remote_worker_registered"

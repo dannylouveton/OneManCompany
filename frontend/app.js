@@ -445,6 +445,16 @@ class AppController {
         this.openPopup({ ...p, type: 'credentials' });
         return { text: `🔑 ${p.title || 'Credentials required'}`, cls: 'system', agent: p.agent || 'SYSTEM' };
       },
+      'access_request_update': (p) => {
+        this._setAccessBadge(p.waiting_ceo || 0);
+        const panel = document.getElementById('access-panel');
+        if (panel && !panel.classList.contains('hidden')) this._loadAccessRequests();
+        if (p.new_card) {
+          this._showToast(`${this._t('Access request for you')}: ${p.service || ''}`, 'info', 6000);
+          return { text: `🔑 ${this._t('Access request for you')}: ${p.service || ''}`, cls: 'ceo', agent: 'COO' };
+        }
+        return null;
+      },
       'agent_task_update':   (p) => {
         // In-place update: use WS payload directly instead of REST re-fetch
         if (this.viewingEmployeeId && p.employee_id === this.viewingEmployeeId && p.task) {
@@ -1211,6 +1221,22 @@ class AppController {
       });
       // Auto-check on startup
       setTimeout(() => this._checkAnnouncementsBadge(), 15000);
+    }
+
+    // Access requests box (cards prepared by the COO)
+    const accessBtn = document.getElementById('access-toolbar-btn');
+    const accessPanel = document.getElementById('access-panel');
+    if (accessBtn && accessPanel) {
+      accessBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        accessPanel.classList.toggle('hidden');
+        if (!accessPanel.classList.contains('hidden')) this._loadAccessRequests();
+      });
+      document.addEventListener('click', (e) => {
+        if (!accessPanel.contains(e.target) && !accessBtn.contains(e.target)) accessPanel.classList.add('hidden');
+      });
+      this._refreshAccessBadge();
+      setInterval(() => this._refreshAccessBadge(), 60000);
     }
 
     // Settings sub-section toggle
@@ -6888,7 +6914,7 @@ class AppController {
         <div class="mcp-emp-row">
           <label class="mcp-check${e.claude_code ? '' : ' mcp-check-disabled'}">
             <input type="checkbox" class="mcp-employee" value="${esc(e.id)}" ${e.granted ? 'checked' : ''} ${e.claude_code ? '' : 'disabled'}>
-            <span>${esc(e.name)}${e.nickname ? ' (' + esc(e.nickname) + ')' : ''}</span>
+            <span>${esc(e.nickname || e.name)}${e.role ? ' · ' + esc(e.role) : ''}</span>
             ${e.claude_code ? '' : '<span class="mcp-hint">Claude Code mode only</span>'}
             <span class="perm-tag mcp-custom-badge${e.custom_actions ? '' : ' hidden'}" data-badge="${esc(e.id)}">Personalized</span>
           </label>
@@ -6943,15 +6969,24 @@ class AppController {
             <label class="mcp-check"><input type="checkbox" class="api-approval" ${r.approval ? 'checked' : ''}><span>Ask me before each write</span></label>
           </div>`;
       };
+      const t = (x) => esc(this._t(x));
+      const day = (iso) => esc((iso || '').replace('T', ' ').slice(0, 16));
+      const grantLine = (g) => {
+        if (!g) return '';
+        const access = g.access === 'write' ? t('read and write') : g.access === 'read' ? t('read only') : t('set in this panel');
+        return `<div class="api-grant-info">${t('Granted by')} ${esc(g.granted_by || '?')} · ${day(g.granted_at)} · ${access}`
+          + `${g.reason ? ` — <span class="api-grant-reason">${esc(g.reason)}</span>` : ''}</div>`;
+      };
       const employees = (s.employees || []).map(e => `
         <div class="mcp-emp-row">
           <label class="mcp-check">
             <input type="checkbox" class="api-employee" value="${esc(e.id)}" ${e.granted ? 'checked' : ''}>
-            <span>${esc(e.name)}${e.nickname ? ' (' + esc(e.nickname) + ')' : ''}</span>
+            <span>${esc(e.nickname || e.name)}${e.role ? ' · ' + esc(e.role) : ''}</span>
             <span class="perm-tag mcp-custom-badge${e.custom_rules ? '' : ' hidden'}" data-badge="api-${esc(e.id)}">Personalized</span>
           </label>
           <button class="pixel-btn small secondary mcp-emp-toggle" onclick="window.app._mcpTogglePersonal('api-${esc(e.id)}')">Rules</button>
         </div>
+        ${grantLine(e.grant)}
         <div class="mcp-emp-panel hidden" data-emp="api-${esc(e.id)}" data-api-emp="${esc(e.id)}" data-custom="${e.custom_rules ? '1' : '0'}"
              onchange="window.app._apiMarkCustom('${esc(e.id)}')">
           <div class="mcp-hint" style="margin-bottom:3px;">Rules for this employee only. Changing them makes them personal.</div>
@@ -6973,12 +7008,33 @@ class AppController {
           <span class="perm-tag">${esc(l.decision || '')}${l.http_status ? ' · ' + esc(l.http_status) : ''}</span>
         </div>`).join('');
       const auth = s.auth || {};
+      const statusLabel = { open: 'With the COO', waiting_ceo: 'Waiting for you', done: 'Done', refused: 'Refused' };
+      const requests = (s.requests || []).map(r => `
+        <div class="api-request-row">
+          <div><span class="perm-tag">${t(statusLabel[r.status] || r.status)}</span> <span class="mcp-hint">${day(r.updated_at)}</span>
+            ${r.what ? ` — ${esc(r.what)}` : ''}</div>
+          ${(r.requesters || []).map(q => `<div class="api-request-who"><b>${esc(q.label || q.employee)}</b> · ${t(q.access === 'write' ? 'read and write' : 'read only')}
+            · ${t({ new: 'With the COO', validated: 'Validated by the COO', granted: 'Granted', refused: 'Refused' }[q.status] || q.status)}
+            ${q.reason ? `<div class="api-grant-reason">${esc(q.reason)}</div>` : ''}</div>`).join('')}
+        </div>`).join('');
+      const names = Object.fromEntries((s.employees || []).map(e => [e.id, e.nickname || e.name]));
+      const accessTag = { read: 'read only', write: 'read and write' };
+      const history = (s.history || []).map(h => `
+        <div class="api-log-row api-history-row">
+          <span class="mcp-hint">${day(h.at)}</span>
+          <span>${esc(names[h.employee] || h.employee || '')}</span>
+          <span>${t(h.event === 'revoked' ? 'Access removed' : 'Access granted')} · ${esc(h.by || '')}${h.reason ? ' — ' + esc(h.reason) : ''}</span>
+          <span class="perm-tag">${accessTag[h.access] ? t(accessTag[h.access]) : ''}</span>
+        </div>`).join('');
+      const keyPlace = auth.in === 'query' ? t('Key sent as query parameter')
+        : auth.in === 'path' ? t('Key sent in the address') : t('Key sent in header');
       return `
         <div class="tool-section" data-api-tool="${esc(toolId)}">
           <div class="tool-section-title">Connection</div>
           <div class="tool-section-body">
-            <div class="mcp-endpoint">${esc(s.base_url || '')}</div>
-            <div class="mcp-hint"><span>${auth.in === 'query' ? 'Key sent as query parameter' : 'Key sent in header'}</span> <code>${esc(auth.name || '')}</code></div>
+            <div class="mcp-endpoint">${s.base_url ? esc(s.base_url) : t('No HTTP API (command line only)')}</div>
+            ${s.base_url ? `<div class="mcp-hint"><span>${keyPlace}</span> <code>${esc(auth.in === 'path' ? auth.format || '' : auth.name || '')}</code>${auth.exchange ? ` · ${t('exchanged for a short-lived token')}` : ''}</div>` : ''}
+            ${s.cli && s.cli.command ? `<div class="mcp-hint">${t('Command-line tool')} <code>${esc(s.cli.command)}</code> — ${t('run in a throwaway container, the key is never shown to the employees')}</div>` : ''}
             <div class="mcp-hint"><span>Current key</span> <code>${esc(s.key || '—')}</code></div>
             ${s.docs_url ? `<a href="${esc(s.docs_url)}" target="_blank" rel="noopener" class="mcp-link">API documentation →</a>` : ''}
             <div class="mcp-hint" style="margin-top:4px;">Employees never see the key: the server adds it to each call it allows.</div>
@@ -7004,6 +7060,8 @@ class AppController {
           <button class="pixel-btn small" onclick="window.app._apiSave('${esc(toolId)}')">Save Changes</button>
           <button class="pixel-btn small danger" onclick="window.app._apiDelete('${esc(toolId)}')">Remove API key</button>
         </div>
+        ${requests ? `<div class="tool-section"><div class="tool-section-title">${t('Requests')}</div><div class="tool-section-body">${requests}</div></div>` : ''}
+        ${history ? `<div class="tool-section"><div class="tool-section-title">${t('Access history')}</div><div class="tool-section-body">${history}</div></div>` : ''}
         <div class="tool-section">
           <div class="tool-section-title">Recent calls</div>
           <div class="tool-section-body">${log || '<span class="empty-hint">No calls yet</span>'}</div>
@@ -7369,6 +7427,143 @@ class AppController {
     if (!confirm(this._t('Remove this API key? It is deleted from the secret store and employees lose access.'))) return;
     const res = await fetch(`/api/apikeys/${encodeURIComponent(toolId)}`, { method: 'DELETE' });
     if (res.ok) this.openToolList();
+  }
+
+  // ── Access requests box: the COO prepares, the CEO supplies keys ───────
+
+  _setAccessBadge(count) {
+    const badge = document.getElementById('access-badge');
+    if (!badge) return;
+    badge.textContent = count > 9 ? '9+' : String(count || '');
+    badge.classList.toggle('hidden', !count);
+  }
+
+  async _refreshAccessBadge() {
+    try {
+      const data = await fetch('/api/access-requests?status=waiting_ceo').then(r => r.json());
+      this._setAccessBadge(data.waiting_ceo || 0);
+    } catch (e) { /* offline: keep the last count */ }
+  }
+
+  async _loadAccessRequests() {
+    const list = document.getElementById('access-list');
+    if (!list) return;
+    const esc = (t) => this._escapeHtml(t == null ? '' : String(t));
+    let data;
+    try {
+      data = await fetch('/api/access-requests?status=waiting_ceo').then(r => r.json());
+    } catch (e) {
+      list.innerHTML = `<div class="access-empty">${esc(this._t('Could not load the requests'))}</div>`;
+      return;
+    }
+    this._setAccessBadge(data.waiting_ceo || 0);
+    const items = data.requests || [];
+    list.innerHTML = items.length
+      ? items.map(r => this._renderAccessCard(r, esc)).join('')
+      : `<div class="access-empty">${esc(this._t('Nothing for you: the COO handles the requests and only sends you what needs a key or an account.'))}</div>`;
+  }
+
+  _renderAccessCard(r, esc) {
+    const t = (s) => esc(this._t(s));
+    const kindLabel = { api: 'API', cli: 'Command line', account: 'Account', other: 'Other' };
+    const who = (r.requesters || []).filter(q => q.status === 'validated' || q.status === 'new').map(q => `
+      <li><b>${esc(q.label)}</b> · ${t(q.access === 'write' ? 'read and write' : 'read only')}<div class="access-reason">${esc(q.reason)}</div>${
+        q.blocked ? `<div class="access-blocked">${t('Blocked')} : ${esc(q.blocked)}</div>` : ''}</li>`).join('');
+    const s = r.setup || {};
+    const isKey = r.deliverable !== 'action';
+    const placeLabel = { header: 'Header', query: 'Query parameter', path: 'In the address' };
+    let tech = '';
+    if (isKey && r.existing_tool_id) {
+      tech = `<div class="mcp-hint">${t('Replaces the key of')} <code>${esc(r.existing_tool_id)}</code></div>`;
+    } else if (isKey) {
+      tech = `
+        <details class="access-tech"><summary>${t('Technical settings (prepared by the COO)')}</summary>
+          <label class="mcp-field">${t('Name')}<input type="text" data-f="name" value="${esc(s.name)}"></label>
+          <label class="mcp-field">${t('API address')}<input type="text" data-f="base_url" value="${esc(s.base_url)}" placeholder="https://"></label>
+          <label class="mcp-field">${t('Key sent as')}
+            <select data-f="auth_in">${['header', 'query', 'path'].map(v =>
+              `<option value="${v}" ${(s.auth_in || 'header') === v ? 'selected' : ''}>${t(placeLabel[v])}</option>`).join('')}</select></label>
+          <label class="mcp-field">${t('Header or parameter name')}<input type="text" data-f="auth_name" value="${esc(s.auth_name)}"></label>
+          <label class="mcp-field">${t('Value format ({key} = the key)')}<input type="text" data-f="auth_format" value="${esc(s.auth_format)}"></label>
+          <label class="mcp-field">${t('Documentation link (optional)')}<input type="text" data-f="docs_url" value="${esc(s.docs_url)}"></label>
+          ${s.exchange ? `<div class="mcp-hint">${t('The key is exchanged for a short-lived token at each use')}</div>` : ''}
+          ${s.cli ? `<div class="mcp-hint">${t('Command-line tool')} <code>${esc(s.cli)}</code> — ${t('run in a throwaway container, the key is never shown to the employees')}</div>` : ''}
+        </details>`;
+    }
+    return `
+      <div class="access-card" data-access-id="${esc(r.id)}">
+        <div class="access-head">
+          <span class="access-service">${esc(r.service)}</span>
+          <span class="perm-tag">${(r.kinds || []).map(k => t(kindLabel[k] || k)).join(' · ')}</span>
+        </div>
+        <div class="access-what">${esc(r.what)}</div>
+        ${r.where_url ? `<a class="mcp-link" href="${esc(r.where_url)}" target="_blank" rel="noopener">${t('Create it here →')}</a>` : ''}
+        ${r.rights ? `<div class="access-row"><span class="access-label">${t('Minimum rights')}</span><span class="access-text">${esc(r.rights)}</span></div>` : ''}
+        <div class="access-row"><span class="access-label">${t('Why')}</span><span class="access-text">${esc(r.why)}</span></div>
+        <div class="access-row"><span class="access-label">${t('Waiting for it')}</span><ul class="access-who">${who || '<li>—</li>'}</ul></div>
+        ${isKey ? `<label class="mcp-field">${t('Key')}<input type="password" class="access-key" autocomplete="new-password" placeholder="${t('Paste the key here')}"></label>` : ''}
+        ${tech}
+        <div class="access-actions">
+          ${isKey ? `<button class="pixel-btn small" onclick="window.app._accessProvide('${esc(r.id)}')">${t('Provide the key')}</button>` : ''}
+          <button class="pixel-btn small ${isKey ? 'secondary' : ''}" onclick="window.app._accessDone('${esc(r.id)}')">${t(isKey ? 'Done, no key needed' : "It's done")}</button>
+          <button class="pixel-btn small danger" onclick="window.app._accessToggleRefuse('${esc(r.id)}')">${t('Refuse')}</button>
+        </div>
+        <div class="access-refuse hidden">
+          <input type="text" class="access-refuse-reason" placeholder="${t('Reason (sent to the employees)')}">
+          <button class="pixel-btn small danger" onclick="window.app._accessRefuse('${esc(r.id)}')">${t('Confirm the refusal')}</button>
+        </div>
+        <div class="mcp-hint access-meta">${t('Prepared by')} ${esc(r.prepared_by || 'COO')} · ${esc((r.updated_at || '').replace('T', ' ').slice(0, 16))}</div>
+      </div>`;
+  }
+
+  _accessCard(id) {
+    return document.querySelector(`.access-card[data-access-id="${CSS.escape(id)}"]`);
+  }
+
+  async _accessPost(id, action, body) {
+    const res = await fetch(`/api/access-requests/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      this._showToast(`${this._t('Error')}: ${data.detail || res.status}`, 'error', 7000);
+      return null;
+    }
+    return data;
+  }
+
+  async _accessProvide(id) {
+    const card = this._accessCard(id);
+    const input = card?.querySelector('.access-key');
+    const key = input?.value.trim();
+    if (!key) {
+      this._showToast(this._t('Paste the key first'), 'error');
+      return;
+    }
+    const setup = {};
+    card.querySelectorAll('.access-tech [data-f]').forEach(el => { setup[el.dataset.f] = el.value.trim(); });
+    const data = await this._accessPost(id, 'provide', { key, setup });
+    if (!data) return;
+    input.value = '';
+    this._showToast(this._t('Key provided: the employees have access and resume their work'), 'success', 6000);
+    this._loadAccessRequests();
+  }
+
+  async _accessDone(id) {
+    if (!(await this._accessPost(id, 'done', {}))) return;
+    this._showToast(this._t('Done: the employees have been told'), 'success');
+    this._loadAccessRequests();
+  }
+
+  _accessToggleRefuse(id) {
+    this._accessCard(id)?.querySelector('.access-refuse')?.classList.toggle('hidden');
+  }
+
+  async _accessRefuse(id) {
+    const reason = this._accessCard(id)?.querySelector('.access-refuse-reason')?.value.trim() || '';
+    if (!(await this._accessPost(id, 'refuse', { reason }))) return;
+    this._showToast(this._t('Refused: the employees have been told'), 'success');
+    this._loadAccessRequests();
   }
 
   async openToolList() {

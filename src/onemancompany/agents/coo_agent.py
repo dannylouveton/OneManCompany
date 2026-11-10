@@ -82,29 +82,35 @@ def _load_assets_from_disk() -> None:
 
 
 def _persist_tool(t: OfficeTool) -> None:
-    """Write a tool's data to assets/tools/{folder_name}/tool.yaml."""
+    """Write a tool's data to assets/tools/{folder_name}/tool.yaml.
+
+    Fields the office tool does not know about (API keys, connectors: type,
+    api, secret, rules, grants, cli…) are kept as they are.
+    """
     if not t.folder_name:
         t.folder_name = slugify_tool_name(t.name)
     folder = TOOLS_DIR / t.folder_name
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / TOOL_YAML_FILENAME
+    existing: dict = {}
+    if path.exists():
+        try:
+            existing = yaml.safe_load(read_text_utf(path)) or {}
+        except yaml.YAMLError as exc:
+            logger.warning("Rewriting unreadable {}: {}", path, exc)
+    existing.update({
+        "id": t.id,
+        "name": t.name,
+        "description": t.description,
+        "added_by": t.added_by,
+        "desk_position": list(t.desk_position),
+        "sprite": t.sprite,
+        "allowed_users": t.allowed_users,
+        "tool_type": t.tool_type,
+        "reference_url": t.reference_url,
+    })
     with open_utf(path, "w") as f:
-        yaml.dump(
-            {
-                "id": t.id,
-                "name": t.name,
-                "description": t.description,
-                "added_by": t.added_by,
-                "desk_position": list(t.desk_position),
-                "sprite": t.sprite,
-                "allowed_users": t.allowed_users,
-                "tool_type": t.tool_type,
-                "reference_url": t.reference_url,
-            },
-            f,
-            allow_unicode=True,
-            default_flow_style=False,
-        )
+        yaml.dump(existing, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
 @tool
@@ -319,7 +325,13 @@ def grant_tool_access(tool_id: str, target_employee_id: str) -> dict:
     t = company_state.tools.get(tool_id)
     if not t:
         return {"status": "error", "message": f"Tool '{tool_id}' not found."}
-    if target_employee_id not in t.allowed_users:
+    from onemancompany.core import api_tools
+
+    if api_tools.load_tool(t.folder_name or tool_id):  # API key: rules and trace
+        api_tools.grant_employee(t.folder_name or tool_id, target_employee_id, access="read",
+                                 reason="grant_tool_access", by="COO")
+        t.allowed_users = list((api_tools.load_tool(t.folder_name or tool_id) or {}).get("allowed_users") or [])
+    elif target_employee_id not in t.allowed_users:
         t.allowed_users.append(target_employee_id)
         _persist_tool(t)
     return {
@@ -346,7 +358,12 @@ def revoke_tool_access(tool_id: str, target_employee_id: str) -> dict:
     t = company_state.tools.get(tool_id)
     if not t:
         return {"status": "error", "message": f"Tool '{tool_id}' not found."}
-    if target_employee_id in t.allowed_users:
+    from onemancompany.core import api_tools
+
+    if api_tools.load_tool(t.folder_name or tool_id):
+        api_tools.revoke_employee(t.folder_name or tool_id, target_employee_id, by="COO", reason="revoke_tool_access")
+        t.allowed_users = list((api_tools.load_tool(t.folder_name or tool_id) or {}).get("allowed_users") or [])
+    elif target_employee_id in t.allowed_users:
         t.allowed_users.remove(target_employee_id)
         _persist_tool(t)
     return {
@@ -892,6 +909,12 @@ def _register_coo_tools() -> None:
         request_hiring, deposit_company_knowledge,
         assign_department,
     ]:
+        tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["COO"]))
+
+    # Access desk: the COO grants, escalates to the CEO or refuses
+    from onemancompany.agents.access_tools import COO_ACCESS_TOOLS
+
+    for t in COO_ACCESS_TOOLS:
         tool_registry.register(t, ToolMeta(name=t.name, category="role", allowed_roles=["COO"]))
 
 

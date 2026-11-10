@@ -18,6 +18,13 @@ An API-key tool is an asset tool folder whose ``tool.yaml`` has
       allowed_writes: ["POST /conversations/*/reply"]
       approval: true                         # permitted writes wait for the CEO
     employee_rules: {"00006": {...}}         # personal rules (override)
+    grants: {"00006": {access, reason, request_id, granted_by, granted_at}}
+    grant_history: [...]                     # who got / lost access, by whom, why
+    cli: {preset: scalingo}                  # optional command-line tool (cli_relay)
+
+Other ways to send the key: ``auth: {in: path, format: "/bot{key}"}`` (in the
+URL, e.g. Telegram) and ``auth.exchange: {url, token_field}`` (the key is
+exchanged for a short-lived token, e.g. Scalingo).
 
 Employees never see the key. They call ``api_request`` (an internal tool):
 the server checks the rules, adds the key, calls the API (only under
@@ -28,8 +35,10 @@ the server checks the rules, adds the key, calls the API (only under
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,7 +54,9 @@ ALL_METHODS = READ_METHODS | {"POST", "PUT", "PATCH", "DELETE"}
 DEFAULT_RULES = {"read_only": True, "allowed_writes": [], "approval": True}
 MAX_RESPONSE_CHARS = 20000
 MAX_LOG_LINES = 500
+MAX_GRANT_HISTORY = 200
 REQUEST_TIMEOUT = 30.0
+AUTH_PLACES = ("header", "query", "path")
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +158,23 @@ def _validate_base_url(base_url: str) -> str:
     return base_url
 
 
+def _validate_exchange(exchange: dict | None) -> dict | None:
+    if not exchange:
+        return None
+    url = str(exchange.get("url") or "").strip()
+    if urlsplit(url).scheme != "https" or not urlsplit(url).hostname:
+        raise ValueError("The token exchange address must start with https://")
+    return {"url": url, "token_field": str(exchange.get("token_field") or "token"),
+            "ttl_seconds": int(exchange.get("ttl_seconds") or 3000)}
+
+
 def create_api_tool(name: str, base_url: str, key: str, *, auth_in: str = "header",
                     auth_name: str = "Authorization", auth_format: str = "Bearer {key}",
-                    docs_url: str = "", description: str = "", headers: dict | None = None) -> str:
+                    docs_url: str = "", description: str = "", headers: dict | None = None,
+                    exchange: dict | None = None, cli: dict | str | None = None,
+                    added_by: str = "CEO") -> str:
+    """Store the key and create the tool. ``base_url`` may be empty for a CLI-only tool."""
+    from onemancompany.core.cli_relay import normalize_cli
     from onemancompany.core.secret_store import get_secret_store
 
     name = (name or "").strip()
@@ -157,24 +182,30 @@ def create_api_tool(name: str, base_url: str, key: str, *, auth_in: str = "heade
         raise ValueError("Name is required")
     if not key:
         raise ValueError("API key is required")
-    if auth_in not in ("header", "query"):
-        raise ValueError("auth_in must be header or query")
-    if "{key}" not in auth_format:
-        auth_format = "{key}"
-    base_url = _validate_base_url(base_url)
+    if auth_in not in AUTH_PLACES:
+        raise ValueError("auth_in must be header, query or path")
+    if "{key}" not in (auth_format or ""):
+        auth_format = "/{key}" if auth_in == "path" else "{key}"
+    cli_spec = normalize_cli(cli)
+    if not (base_url or "").strip() and not cli_spec:
+        raise ValueError("Give the API address, or a command-line tool")
+    base_url = _validate_base_url(base_url) if (base_url or "").strip() else ""
+    auth = {"in": auth_in, "name": auth_name or "Authorization", "format": auth_format}
+    if (ex := _validate_exchange(exchange)):
+        auth["exchange"] = ex
     tool_id = _unique_id(name)
     secret_name = "OMC_API_" + re.sub(r"[^A-Z0-9]+", "_", tool_id.upper()).strip("_") + "_KEY"
     get_secret_store().set_many({secret_name: key})
     data = {
         "id": tool_id,
         "name": name,
-        "description": description or f"API access: {base_url}",
-        "added_by": "CEO",
+        "description": description or (f"API access: {base_url}" if base_url else f"Command line: {cli_spec['command']}"),
+        "added_by": added_by,
         "type": TOOL_TYPE_API_KEY,
         "sprite": "desk_equipment",
         "api": {
             "base_url": base_url,
-            "auth": {"in": auth_in, "name": auth_name or "Authorization", "format": auth_format},
+            "auth": auth,
             "headers": {str(k): str(v) for k, v in (headers or {}).items()},
             "docs_url": docs_url,
         },
@@ -182,8 +213,10 @@ def create_api_tool(name: str, base_url: str, key: str, *, auth_in: str = "heade
         "allowed_users": [],
         "rules": dict(DEFAULT_RULES),
     }
+    if cli_spec:
+        data["cli"] = cli_spec
     save_tool(tool_id, data)
-    logger.info("Created API key tool {} ({})", tool_id, base_url)
+    logger.info("Created API key tool {} ({})", tool_id, base_url or cli_spec["command"])
     return tool_id
 
 
@@ -206,13 +239,93 @@ def delete_secret(tool_id: str) -> None:
         get_secret_store().delete(data["secret"])
 
 
+def _record_history(data: dict, entry: dict) -> None:
+    history = list(data.get("grant_history") or [])
+    history.append(entry)
+    data["grant_history"] = history[-MAX_GRANT_HISTORY:]
+
+
+def _sync_state(tool_id: str, data: dict) -> None:
+    """Keep the in-memory office tool in step with tool.yaml."""
+    try:
+        from onemancompany.core.state import company_state
+
+        tool = company_state.tools.get(tool_id)
+        if tool is not None:
+            tool.allowed_users = list(data.get("allowed_users") or [])
+    except Exception as exc:  # the file is the source of truth
+        logger.debug("Cannot sync tool {} in memory: {}", tool_id, exc)
+
+
+def rules_for_access(access: str, allowed_writes: list[str] | None = None) -> dict:
+    """Personal rules for a grant: reads only, some writes, or all writes (no per-write approval)."""
+    if access == "write":
+        if allowed_writes:
+            return {"read_only": True, "allowed_writes": list(allowed_writes), "approval": False}
+        return {"read_only": False, "allowed_writes": [], "approval": False}
+    return {"read_only": True, "allowed_writes": [], "approval": False}
+
+
+def grant_employee(tool_id: str, employee_id: str, *, access: str = "read",
+                   allowed_writes: list[str] | None = None, reason: str = "",
+                   request_id: str = "", by: str = "COO") -> dict:
+    """Give an employee access, with the minimum rules for it, and trace why and by whom."""
+    data = load_tool(tool_id)
+    if not data:
+        raise ValueError("Not an API key tool")
+    access = "write" if access == "write" else "read"
+    emp = str(employee_id)
+    rules = _normalize_rules(rules_for_access(access, allowed_writes))
+    data["allowed_users"] = sorted({str(u) for u in data.get("allowed_users") or []} | {emp})
+    personal = dict(data.get("employee_rules") or {})
+    personal[emp] = rules
+    data["employee_rules"] = personal
+    info = {"access": access, "allowed_writes": rules["allowed_writes"], "reason": reason,
+            "request_id": request_id, "granted_by": by, "granted_at": _now()}
+    grants = dict(data.get("grants") or {})
+    grants[emp] = info
+    data["grants"] = grants
+    _record_history(data, {"at": info["granted_at"], "employee": emp, "event": "granted", "by": by,
+                           "access": access, "reason": reason, "request_id": request_id})
+    save_tool(tool_id, data)
+    _sync_state(tool_id, data)
+    return info
+
+
+def revoke_employee(tool_id: str, employee_id: str, *, by: str = "CEO", reason: str = "") -> bool:
+    data = load_tool(tool_id)
+    if not data:
+        raise ValueError("Not an API key tool")
+    emp = str(employee_id)
+    users = {str(u) for u in data.get("allowed_users") or []}
+    if emp not in users:
+        return False
+    data["allowed_users"] = sorted(users - {emp})
+    (data.get("employee_rules") or {}).pop(emp, None)
+    (data.get("grants") or {}).pop(emp, None)
+    _record_history(data, {"at": _now(), "employee": emp, "event": "revoked", "by": by, "reason": reason})
+    save_tool(tool_id, data)
+    _sync_state(tool_id, data)
+    return True
+
+
 def update_access(tool_id: str, allowed_users: list[str] | None = None, rules: dict | None = None,
-                  employee_rules: dict[str, dict | None] | None = None) -> dict:
+                  employee_rules: dict[str, dict | None] | None = None, *, by: str = "CEO") -> dict:
     data = load_tool(tool_id)
     if not data:
         raise ValueError("Not an API key tool")
     if allowed_users is not None:
-        data["allowed_users"] = sorted({str(u) for u in allowed_users})
+        before = {str(u) for u in data.get("allowed_users") or []}
+        after = {str(u) for u in allowed_users}
+        grants = dict(data.get("grants") or {})
+        for emp in sorted(after - before):
+            grants[emp] = {"access": "custom", "reason": "", "request_id": "", "granted_by": by, "granted_at": _now()}
+            _record_history(data, {"at": _now(), "employee": emp, "event": "granted", "by": by})
+        for emp in sorted(before - after):
+            grants.pop(emp, None)
+            _record_history(data, {"at": _now(), "employee": emp, "event": "revoked", "by": by})
+        data["grants"] = grants
+        data["allowed_users"] = sorted(after)
     if rules is not None:
         data["rules"] = _normalize_rules(rules)
     if employee_rules is not None:
@@ -249,7 +362,7 @@ def _clean_path(path: str) -> str:
 def decide(data: dict, employee_id: str, method: str, path: str) -> tuple[str, str]:
     """Return (decision, reason) with decision in allowed / approval / denied."""
     if not _granted(data, employee_id):
-        return "denied", "You do not have access to this API. Ask the CEO to grant it in the Tools panel."
+        return "denied", "You do not have access to this API. Ask for it with request_access()."
     method = method.upper()
     if method not in ALL_METHODS:
         return "denied", f"Unsupported HTTP method: {method}"
@@ -262,7 +375,8 @@ def decide(data: dict, employee_id: str, method: str, path: str) -> tuple[str, s
         for rule in rules["allowed_writes"]
     )
     if not permitted:
-        return "denied", f"{method} {bare} is not allowed for you (read-only access). Ask the CEO to allow it."
+        return "denied", (f"{method} {bare} is not allowed for you (read-only access). "
+                          "If you really need it, ask with request_access(access='write').")
     if rules["approval"]:
         return "approval", "This write needs the CEO's approval."
     return "allowed", ""
@@ -285,6 +399,29 @@ def _redact(value: Any, secret: str) -> Any:
         return redacted
 
 
+_exchange_cache: dict[str, tuple[str, float]] = {}
+
+
+def _exchanged_token(data: dict, key: str) -> str:
+    """Short-lived token obtained with the key (e.g. Scalingo), cached until it expires."""
+    import httpx
+
+    exchange = (data.get("api") or {}).get("auth", {}).get("exchange") or {}
+    cache_key = f"{data.get('id', '')}:{hashlib.sha256(key.encode()).hexdigest()[:16]}"
+    hit = _exchange_cache.get(cache_key)
+    if hit and hit[1] > time.time():
+        return hit[0]
+    resp = httpx.post(exchange["url"], auth=("", key), headers={"Accept": "application/json"},
+                      timeout=REQUEST_TIMEOUT, follow_redirects=False)
+    if not resp.is_success:
+        raise ValueError(f"the key was refused when asking for a session token (HTTP {resp.status_code})")
+    token = str((resp.json() or {}).get(exchange.get("token_field") or "token") or "")
+    if not token:
+        raise ValueError("no session token in the answer")
+    _exchange_cache[cache_key] = (token, time.time() + int(exchange.get("ttl_seconds") or 3000))
+    return token
+
+
 def _execute(data: dict, method: str, path: str, query: dict | None, body: Any) -> dict:
     import httpx
 
@@ -294,18 +431,28 @@ def _execute(data: dict, method: str, path: str, query: dict | None, body: Any) 
     key = get_secret_store().get(data["secret"]) or ""
     if not key:
         return {"ok": False, "error": "The API key is missing. Ask the CEO to set it in the Tools panel."}
-    base = api["base_url"].rstrip("/")
-    url = base + path
+    base = (api.get("base_url") or "").rstrip("/")
+    if not base:
+        return {"ok": False, "error": "This tool has no HTTP API: use run_cli."}
+    auth = api.get("auth") or {}
+    secrets = [key]
+    value = key
+    if auth.get("exchange"):
+        try:
+            value = _exchanged_token(data, key)
+        except (httpx.HTTPError, ValueError) as exc:
+            return {"ok": False, "error": _redact(f"Authentication failed: {exc}", key)[:500]}
+        secrets.append(value)
+    credential = str(auth.get("format") or "{key}").replace("{key}", value)
+    url = base + (credential if auth.get("in") == "path" else "") + path
     if urlsplit(url).netloc != urlsplit(base).netloc or not url.startswith(base):
         return {"ok": False, "error": "The request must stay under the API address"}
 
     headers = {"Accept": "application/json", **(api.get("headers") or {})}
     params = dict(query or {})
-    auth = api.get("auth") or {}
-    credential = str(auth.get("format") or "{key}").replace("{key}", key)
     if auth.get("in") == "query":
         params[auth.get("name") or "api_key"] = credential
-    else:
+    elif auth.get("in") != "path":
         headers[auth.get("name") or "Authorization"] = credential
 
     kwargs: dict[str, Any] = {"params": params, "headers": headers, "timeout": REQUEST_TIMEOUT}
@@ -317,7 +464,10 @@ def _execute(data: dict, method: str, path: str, query: dict | None, body: Any) 
     try:
         resp = httpx.request(method, url, follow_redirects=False, **kwargs)
     except httpx.HTTPError as exc:
-        return {"ok": False, "error": f"Request failed: {type(exc).__name__}: {exc}"[:500]}
+        message = f"Request failed: {type(exc).__name__}: {exc}"
+        for secret in secrets:
+            message = _redact(message, secret)
+        return {"ok": False, "error": message[:500]}
 
     text = resp.text[:MAX_RESPONSE_CHARS]
     try:
@@ -326,7 +476,9 @@ def _execute(data: dict, method: str, path: str, query: dict | None, body: Any) 
             payload = text + "… [truncated]"
     except ValueError:
         payload = text + ("… [truncated]" if len(resp.text) > MAX_RESPONSE_CHARS else "")
-    return {"ok": resp.is_success, "http_status": resp.status_code, "body": _redact(payload, key)}
+    for secret in secrets:
+        payload = _redact(payload, secret)
+    return {"ok": resp.is_success, "http_status": resp.status_code, "body": payload}
 
 
 def _log(tool_id: str, entry: dict) -> None:
@@ -455,15 +607,25 @@ def granted_apis(employee_id: str) -> list[dict]:
         if not _granted(data, employee_id):
             continue
         rules = effective_rules(data, employee_id)
-        apis.append({
+        base_url = (data.get("api") or {}).get("base_url", "")
+        item = {
             "api": tool_id,
             "name": data.get("name", tool_id),
-            "base_url": data["api"]["base_url"],
-            "docs_url": data["api"].get("docs_url", ""),
+            "base_url": base_url,
+            "docs_url": (data.get("api") or {}).get("docs_url", ""),
             "description": data.get("description", ""),
-            "reads": "allowed (GET)",
+            "reads": "allowed (GET)" if base_url else "no HTTP API (use run_cli)",
             "writes": ("only " + ", ".join(rules["allowed_writes"]) if rules["read_only"] and rules["allowed_writes"]
                        else "not allowed" if rules["read_only"] else "allowed"),
             "approval_for_writes": rules["approval"],
-        })
+        }
+        cli = data.get("cli") or {}
+        if cli.get("command"):
+            item["cli"] = {
+                "command": cli["command"],
+                "use": f'run_cli(api="{tool_id}", command="<{cli["command"]} arguments>")',
+                "allowed": "all commands" if not rules["read_only"] else "read commands only",
+                **({"docs_url": cli["docs_url"]} if cli.get("docs_url") else {}),
+            }
+        apis.append(item)
     return apis

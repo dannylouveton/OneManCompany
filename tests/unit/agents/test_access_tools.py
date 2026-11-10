@@ -1,0 +1,131 @@
+"""Access desk tools: employees ask, the COO grants / escalates / refuses."""
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import yaml
+
+from onemancompany.agents import access_tools
+from onemancompany.core import access_desk, api_tools
+from onemancompany.core import config as config_mod
+
+
+@pytest.fixture()
+def desk(tmp_path, monkeypatch):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    monkeypatch.setattr(config_mod, "COMPANY_DIR", tmp_path)
+    monkeypatch.setattr(config_mod, "TOOLS_DIR", tools)
+    monkeypatch.setattr(config_mod, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(config_mod, "load_app_config", lambda: {})
+    monkeypatch.setattr("onemancompany.core.store.mark_dirty", lambda *a, **k: None)
+    people = {"00007": {"nickname": "Le Diplomate", "role": "Lead DevOps / SRE"}, "00003": {"role": "COO"}}
+    monkeypatch.setattr("onemancompany.core.store.load_employee", lambda e: people.get(e, {}))
+    monkeypatch.setattr("onemancompany.agents.common_tools.load_employee", lambda e: people.get(e, {"name": e}))
+    monkeypatch.setattr(access_tools, "_fr", lambda: True)
+    monkeypatch.setattr(access_desk, "_lang", lambda: "fr")
+    return tmp_path
+
+
+def _task_node(node_id="n_req", node_type="task"):
+    return SimpleNamespace(id=node_id, node_type=node_type, project_id="p1/iter_001", hold_reason="",
+                           project_dir="")
+
+
+@pytest.mark.asyncio
+async def test_request_in_a_project_task_goes_to_the_coo_and_waits(desk, monkeypatch):
+    monkeypatch.setattr(access_tools, "_task_context", lambda: ("/x/task_tree.yaml", "p1/iter_001", _task_node()))
+    dispatched = []
+
+    class FakeDispatch:
+        @staticmethod
+        def invoke(args):
+            dispatched.append(args)
+            return {"status": "dispatched", "node_id": "n_coo"}
+
+    monkeypatch.setattr("onemancompany.agents.tree_tools.dispatch_child", FakeDispatch)
+    result = await access_tools.request_access.ainvoke({
+        "service": "Scalingo", "reason": "vérifier les sauvegardes", "kind": "cli",
+        "blocked": "test de restauration", "employee_id": "00007"})
+    assert result["status"] == "requested" and "End your turn" in result["message"]
+    assert dispatched[0]["target_employee_id"] == "00003" and dispatched[0]["title"] == "Accès : Scalingo"
+    assert "grant_access" in dispatched[0]["description"] and "escalate_access_request" in dispatched[0]["description"]
+    req = access_desk.list_requests()[0]
+    assert req["requesters"][0]["coo_node"] == "n_coo" and req["requesters"][0]["task_id"] == "n_req"
+
+    # A retry in the same task does not send a second request while the COO works on it
+    monkeypatch.setattr(access_tools, "_node_active", lambda tree, node: node == "n_coo")
+    again = await access_tools.request_access.ainvoke({
+        "service": "scalingo", "reason": "idem", "employee_id": "00007"})
+    assert again["status"] == "already_requested" and len(dispatched) == 1
+
+
+@pytest.mark.asyncio
+async def test_validation(desk, monkeypatch):
+    monkeypatch.setattr(access_tools, "_task_context", lambda: ("", "", None))
+    result = await access_tools.request_access.ainvoke({"service": "", "reason": "x", "employee_id": "00007"})
+    assert result["status"] == "error"
+
+
+def test_coo_escalates_and_its_task_waits(desk, monkeypatch):
+    req, _ = access_desk.submit("00007", "n8n", "voir les exécutions en erreur")
+    node = _task_node("n_coo")
+    monkeypatch.setattr(access_tools, "_task_context", lambda: ("/x/task_tree.yaml", "p1/iter_001", node))
+    monkeypatch.setattr("onemancompany.core.task_tree.save_tree_async", lambda path: None)
+    bad = access_tools.escalate_access_request.invoke({
+        "request_id": req["id"], "what_to_create": "Une clé d'API n8n", "why": "erreurs", "auth": "weird"})
+    assert bad["status"] == "error"
+    out = access_tools.escalate_access_request.invoke({
+        "request_id": req["id"], "what_to_create": "Une clé d'API n8n", "why": "Le Diplomate surveille les erreurs",
+        "minimal_rights": "lecture", "base_url": "https://n8n.example.com/api/v1",
+        "auth": "header:X-N8N-API-KEY:{key}", "employee_id": "00003"})
+    assert out["status"] == "sent_to_ceo" and "End your turn" in out["message"]
+    assert node.hold_reason == f"access_request={req['id']},no_watchdog=1"
+    card = access_desk.get_request(req["id"])["card"]
+    assert card["setup"]["auth_name"] == "X-N8N-API-KEY" and card["by"] == "COO"
+
+
+@pytest.mark.asyncio
+async def test_coo_grants_an_existing_connector_and_restarts_sessions(desk, monkeypatch):
+    folder = desk / "tools" / "photonet"
+    folder.mkdir()
+    (folder / "tool.yaml").write_text(yaml.safe_dump({"id": "photonet", "name": "Photonet", "type": "mcp",
+                                                      "mcp": {"command": "node"}, "allowed_users": ["00006"]}))
+    req, _ = access_desk.submit("00007", "Photonet", "lire les commandes")
+    stop = AsyncMock(return_value=1)
+    with patch("onemancompany.core.claude_session.stop_employee_daemons", stop):
+        out = await access_tools.grant_access.ainvoke({
+            "request_id": req["id"], "target_employee_id": "00007", "tool_id": "photonet", "employee_id": "00003"})
+    assert out["status"] == "granted" and "Accès accordé" in out["for_the_employee"]
+    assert "mcp__photonet__" in out["for_the_employee"]
+    data = yaml.safe_load((folder / "tool.yaml").read_text())
+    assert data["allowed_users"] == ["00006", "00007"] and data["grants"]["00007"]["granted_by"] == "COO"
+    stop.assert_awaited_once()
+
+
+def test_coo_refuses(desk):
+    req, _ = access_desk.submit("00007", "Stripe", "rembourser", access="write")
+    out = access_tools.refuse_access.invoke({"request_id": req["id"], "target_employee_id": "00007",
+                                             "reason": "le support s'en charge", "employee_id": "00003"})
+    assert out["status"] == "refused" and "le support s'en charge" in out["for_the_employee"]
+    listed = access_tools.list_access_requests.invoke({"status": "all"})
+    assert listed["requests"][0]["status"] == "refused"
+
+
+def test_coo_tool_grant_keeps_api_key_definition(desk, monkeypatch):
+    """grant_tool_access on an API key tool used to rewrite tool.yaml without its API settings."""
+    from onemancompany.agents import coo_agent
+    from onemancompany.core.state import OfficeTool, company_state
+
+    tool_id = api_tools.create_api_tool("Intercom", "https://api.intercom.io", "secret_key_99999")
+    monkeypatch.setitem(company_state.tools, tool_id, OfficeTool(id=tool_id, name="Intercom", description="",
+                                                                 added_by="CEO", folder_name=tool_id,
+                                                                 allowed_users=[]))
+    coo_agent.grant_tool_access.invoke({"tool_id": tool_id, "target_employee_id": "00007"})
+    data = api_tools.load_tool(tool_id)
+    assert data["type"] == "api_key" and data["api"]["base_url"] == "https://api.intercom.io"
+    assert data["allowed_users"] == ["00007"] and data["grants"]["00007"]["granted_by"] == "COO"
+    coo_agent.revoke_tool_access.invoke({"tool_id": tool_id, "target_employee_id": "00007"})
+    assert api_tools.load_tool(tool_id)["allowed_users"] == []

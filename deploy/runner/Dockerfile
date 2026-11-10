@@ -50,6 +50,18 @@ RUN pip install --no-cache-dir uv \
  && npx -y playwright@1.56.1 install --with-deps chromium \
  && chmod -R a+rX /ms-playwright
 
+# Command-line tools the company CLI relay runs for employees (the control
+# plane starts a throwaway container from this image with the key; employees
+# never see it). gh comes from apt above.
+ARG SCALINGO_CLI_VERSION=1.49.0
+RUN arch="$(dpkg --print-architecture)" \
+ && curl -fsSL -o /tmp/scalingo.tgz \
+      "https://github.com/Scalingo/cli/releases/download/${SCALINGO_CLI_VERSION}/scalingo_${SCALINGO_CLI_VERSION}_linux_${arch}.tar.gz" \
+ && mkdir -p /tmp/scalingo && tar -xzf /tmp/scalingo.tgz -C /tmp/scalingo \
+ && find /tmp/scalingo -type f -name scalingo -exec install -m 0755 {} /usr/local/bin/scalingo \; \
+ && rm -rf /tmp/scalingo /tmp/scalingo.tgz \
+ && test -x /usr/local/bin/scalingo
+
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import tool
@@ -38,7 +39,7 @@ def list_company_apis(employee_id: str = "") -> dict:
 
     apis = granted_apis(employee_id)
     if not apis:
-        return {"apis": [], "message": "No API access granted. Ask the CEO to add an API key in the Tools panel."}
+        return {"apis": [], "message": "No API access yet. Ask for one with request_access(service, reason)."}
     return {"apis": apis}
 
 
@@ -79,6 +80,43 @@ async def api_request(api: str, method: str, path: str, query: dict | str | None
     return result
 
 
+def _current_workdir(employee_id: str) -> Path:
+    """The folder of the task being run (project or workspace)."""
+    from onemancompany.agents.access_tools import _task_context
+    from onemancompany.core.config import get_workspace_dir
+
+    _tree_path, _project_id, node = _task_context()
+    project_dir = getattr(node, "project_dir", "") if node is not None else ""
+    if project_dir and Path(project_dir).is_dir():
+        return Path(project_dir)
+    workspace = get_workspace_dir(employee_id)
+    workspace.mkdir(parents=True, exist_ok=True)
+    return workspace
+
+
+@tool
+async def run_cli(api: str, command: str | list[str], timeout_seconds: int = 120, employee_id: str = "") -> dict:
+    """Run a company command-line tool (e.g. scalingo, gh) — the server adds the key for you.
+
+    Tools listed by list_company_apis() with a "cli" entry can be used here.
+    The command runs in a clean container whose only folder is your current
+    work folder (files you pass must be inside it); you never see the key.
+    With read-only access, only read commands run. Interactive or endless
+    commands (log streaming, tunnels) are stopped at the timeout.
+
+    Args:
+        api: Tool id from list_company_apis (e.g. "scalingo").
+        command: The arguments, e.g. "apps" or "--app photonet-backend logs -n 200"
+            (the program name itself is optional).
+        timeout_seconds: Maximum duration in seconds (default 120, max 600).
+        employee_id: Your employee ID (auto-filled).
+    """
+    from onemancompany.core import cli_relay
+
+    workdir = _current_workdir(employee_id)
+    return await cli_relay.run(api, employee_id, command, workdir, timeout_seconds)
+
+
 @tool
 def api_request_status(request_id: str, employee_id: str = "") -> dict:
     """Check an API call that was waiting for the CEO's approval.
@@ -101,4 +139,4 @@ def api_request_status(request_id: str, employee_id: str = "") -> dict:
     return out
 
 
-API_KEY_TOOLS = [list_company_apis, api_request, api_request_status]
+API_KEY_TOOLS = [list_company_apis, api_request, api_request_status, run_cli]

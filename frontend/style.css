@@ -7164,3 +7164,41 @@ button:disabled, [aria-disabled="true"] {
 .ceo-q-other { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 6px 8px; font: inherit; font-size: 12px; background: #0d0d14; color: #eee; border: 1px solid #3a3a4a; }
 .ceo-q-submit { margin-top: 10px; }
 .ceo-q-submit:disabled { opacity: 0.5; cursor: default; }
+
+/* ===== Access requests box (prepared by the COO; the CEO supplies keys) ===== */
+.access-badge { position: absolute; top: -4px; right: -6px; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box;
+  background: var(--pixel-red, #e53e3e); color: #fff; border-radius: 7px; font: 700 10px/14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; }
+.access-badge.hidden { display: none; }
+#access-panel .floating-panel-body, #access-panel .mcp-field, #access-panel .mcp-hint, #access-panel .mcp-link, #access-panel .access-empty {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; line-height: 1.45; letter-spacing: 0; }
+#access-panel .mcp-hint { font-size: 12px; color: #a0a0b0; }
+.access-empty { color: #a0a0b0; text-align: center; padding: 18px 8px; }
+.access-card { border: 1px solid var(--pixel-cyan, #4fd1c5); background: rgba(79, 209, 197, 0.05); padding: 10px 12px; margin-bottom: 10px; color: #ddd; }
+.access-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.access-service { font-weight: 700; font-size: 15px; color: #fff; }
+.access-card .perm-tag { font-size: 11px; }
+.access-what { font-weight: 600; color: #eee; margin: 2px 0 4px; white-space: pre-wrap; }
+.access-row { margin: 6px 0; }
+.access-text { white-space: pre-wrap; }
+.access-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #9fe; margin-bottom: 1px; }
+.access-who { margin: 2px 0 0; padding-left: 16px; }
+.access-who li { margin-bottom: 4px; }
+.access-reason { color: #c8c8d4; font-size: 12px; }
+.access-blocked { color: #f6ad55; font-size: 12px; }
+.access-card .mcp-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; color: #c8c8d4; }
+.access-card .mcp-field input, .access-card .mcp-field select, .access-refuse input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; padding: 6px 8px;
+  background: #0d0d14; color: #eee; border: 1px solid #444; border-radius: 2px; }
+.access-tech { margin: 6px 0; }
+.access-tech summary { cursor: pointer; color: #a0a0b0; font-size: 12px; }
+.access-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.access-refuse { display: flex; gap: 6px; margin-top: 6px; }
+.access-refuse.hidden { display: none; }
+.access-refuse input { flex: 1; }
+.access-meta { margin-top: 6px; }
+#tool-list-body .api-grant-info { font-size: 12px; color: #a0a0b0; margin: -2px 0 6px 26px; }
+#tool-list-body .api-grant-reason { color: #c8c8d4; }
+#tool-list-body .api-request-row { border-bottom: 1px solid #222; padding: 6px 0; font-size: 13px; }
+#tool-list-body .api-request-who { margin: 3px 0 0 10px; font-size: 12px; }
+#tool-list-body .mcp-footer + .tool-section { margin-top: 14px; }
+#tool-list-body .api-history-row { grid-template-columns: 110px 110px 1fr auto; word-break: normal; overflow-wrap: anywhere; }

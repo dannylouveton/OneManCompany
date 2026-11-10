@@ -163,3 +163,54 @@ def test_agent_sandbox_read_only_dirs(tmp_path, monkeypatch):
     assert str(wiki) in s["sandbox"]["filesystem"]["allowRead"]
     assert str(wiki) not in s["sandbox"]["filesystem"]["allowWrite"]
     assert f"Edit(/{wiki}/**)" in s["permissions"]["deny"]
+
+
+def test_key_in_the_path_is_redacted(env):
+    tools, calls = env
+    tool_id = api_tools.create_api_tool("Telegram", "https://api.telegram.org", "secret_key_123456",
+                                        auth_in="path", auth_format="/bot{key}")
+    api_tools.update_access(tool_id, allowed_users=["00007"])
+    result = api_tools.request(tool_id, "00007", "GET", "/getMe")
+    assert calls[-1]["url"] == "https://api.telegram.org/botsecret_key_123456/getMe"
+    assert "Authorization" not in calls[-1]["headers"]
+    assert "secret_key_123456" not in json.dumps(result)
+    assert api_tools.read_log(tool_id)[0]["path"] == "/getMe"  # the key never reaches the journal
+
+
+def test_key_exchanged_for_a_session_token(env, monkeypatch):
+    tools, calls = env
+    exchanges = []
+
+    def fake_post(url, auth=None, **kwargs):
+        exchanges.append((url, auth))
+        return httpx.Response(200, json={"token": "session_JWT_42"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    api_tools._exchange_cache.clear()
+    tool_id = api_tools.create_api_tool("Scalingo", "https://api.osc-fr1.scalingo.com", "tk-us-secret_key_123456",
+                                        exchange={"url": "https://auth.scalingo.com/v1/tokens/exchange"})
+    api_tools.update_access(tool_id, allowed_users=["00007"])
+    for _ in range(2):
+        api_tools.request(tool_id, "00007", "GET", "/v1/apps")
+    assert len(exchanges) == 1 and exchanges[0][1] == ("", "tk-us-secret_key_123456")  # cached
+    assert calls[-1]["headers"]["Authorization"] == "Bearer session_JWT_42"
+    with pytest.raises(ValueError):
+        api_tools.create_api_tool("Bad", "https://x.example", "k", exchange={"url": "http://insecure"})
+
+
+def test_grants_are_traced(env):
+    tools, _calls = env
+    tool_id = _make(tools)
+    info = api_tools.grant_employee(tool_id, "00007", access="write", allowed_writes=["POST /orders/*/refund"],
+                                    reason="remboursements", request_id="r1", by="COO")
+    assert info["access"] == "write" and info["allowed_writes"] == ["POST /orders/*/refund"]
+    rules = api_tools.effective_rules(api_tools.load_tool(tool_id), "00007")
+    assert rules == {"read_only": True, "allowed_writes": ["POST /orders/*/refund"], "approval": False}
+    api_tools.update_access(tool_id, allowed_users=["00006"])  # the CEO changes the list in the panel
+    data = api_tools.load_tool(tool_id)
+    assert "00007" not in data["grants"] and data["grants"]["00006"]["granted_by"] == "CEO"
+    events = [(h["employee"], h["event"], h["by"]) for h in data["grant_history"]]
+    assert events == [("00007", "granted", "COO"), ("00006", "granted", "CEO"), ("00007", "revoked", "CEO")]
+    assert api_tools.revoke_employee(tool_id, "00006", by="COO", reason="fin de mission")
+    assert not api_tools.revoke_employee(tool_id, "00006")
+    assert api_tools.load_tool(tool_id)["allowed_users"] == []
