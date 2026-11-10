@@ -1526,6 +1526,10 @@ def format_ceo_questions(questions: list[dict], context: str = "") -> str:
 async def ask_ceo(questions: list[dict] | str, context: str = "", employee_id: str = "") -> dict:
     """Ask the CEO 1-4 multiple-choice questions; they answer with one click.
 
+    Hierarchy: unless you are the executive assistant, your questions go to the
+    executive assistant first, who answers what they can and forwards the rest
+    to the CEO.
+
     Use this whenever you need a decision, a preference or a missing fact from
     the CEO, instead of writing an open question. Each question offers 2-4
     concrete options; the CEO can always pick "Other" and write their own
@@ -1552,27 +1556,55 @@ async def ask_ceo(questions: list[dict] | str, context: str = "", employee_id: s
     text = format_ceo_questions(clean, context)
 
     from onemancompany.agents.tree_tools import _find_entry_for_task, dispatch_child
-    from onemancompany.core.config import CEO_ID
+    from onemancompany.core.config import CEO_ID, EA_ID
     from onemancompany.core.vessel import _current_task_id
+
+    title = clean[0]["header"] or clean[0]["question"][:40]
+    # Hierarchy: employees' questions go to the executive assistant first.
+    # The EA answers what it can and forwards the rest to the CEO.
+    via_ea = str(employee_id) not in (EA_ID, CEO_ID)
+    if via_ea:
+        asker = _employee_label(employee_id)
+        text = (
+            f"Questions from {asker} for the CEO, sent to you first as the executive assistant.\n"
+            "If you know the answers (company context, earlier CEO decisions, documents), answer them "
+            "yourself: your result is the answer the employee receives. Otherwise ask the CEO with "
+            "ask_ceo (same questions and options; drop the ones you answered) and finish with the "
+            "CEO's answer as your result.\n\n" + text
+        )
+    target = EA_ID if via_ea else CEO_ID
+    who = "the executive assistant (who forwards to the CEO if needed)" if via_ea else "the CEO"
 
     task_id = _current_task_id.get()
     if task_id and _find_entry_for_task(task_id)[0]:
-        title = clean[0]["header"] or clean[0]["question"][:40]
         result = dispatch_child.invoke({
-            "target_employee_id": CEO_ID,
+            "target_employee_id": target,
             "description": text,
-            "acceptance_criteria": ["The CEO answered the questions"],
+            "acceptance_criteria": ["The questions are answered"],
             "title": f"Question: {title}",
         })
         if result.get("status") == "error":
             return result
-        return {"status": "asked", "request_node": result.get("node_id", ""),
-                "message": "Questions sent to the CEO. End your turn now: you will be "
-                           "resumed with the answer as [CEO REPLY]."}
+        return {"status": "asked", "to": target, "request_node": result.get("node_id", ""),
+                "message": f"Questions sent to {who}. End your turn now: you will be "
+                           "resumed with the answer."}
 
+    if via_ea:
+        from onemancompany.api.routes import _push_adhoc_task
+
+        _push_adhoc_task(EA_ID, text + f"\n\nSend the answer to {employee_id} with dispatch_child.")
+        return {"status": "asked", "to": EA_ID,
+                "message": f"Questions sent to {who}. The answer will arrive as a new task."}
     sent = await report_to_ceo.ainvoke({"message": text, "employee_id": employee_id})
-    return {"status": "asked", "channel": sent.get("channel"),
+    return {"status": "asked", "to": CEO_ID, "channel": sent.get("channel"),
             "message": "Questions sent to the CEO. Their answer will arrive as their next message."}
+
+
+def _employee_label(employee_id: str) -> str:
+    emp = load_employee(employee_id) or {}
+    name = emp.get("nickname") or emp.get("name") or employee_id
+    role = emp.get("role", "")
+    return f"{name} ({employee_id}{', ' + role if role else ''})"
 
 
 def _credential_env_key(service_name: str) -> str:

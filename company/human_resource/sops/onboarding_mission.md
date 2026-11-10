@@ -7,7 +7,7 @@ Why you were hired: {context}
 Workspace for this mission: {workspace}
 
 ## Step 1 — Map what exists
-Explore what exists in your area (projects, documents, the tools and access you have, past conversations and reports) without changing anything yet. Write `map.md` in the workspace: what exists, how it works, the weak spots, what is missing. Find the answers to your questions yourself; only ask the CEO what you truly cannot find.
+Explore what exists in your area (projects, documents, the tools and access you have, past conversations and reports) without changing anything yet. Write `map.md` in the workspace: what exists, how it works, the weak spots, what is missing. Find the answers to your questions yourself; for what you truly cannot find, use ask_ceo (the question goes to the executive assistant first).
 
 ## Step 2 — Three quick wins
 Pick three concrete improvements that are useful right away and safe, and do them. Record them in `quick_wins.md`: what you did, why, the result.

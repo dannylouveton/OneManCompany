@@ -7,7 +7,7 @@ Contexte de ton recrutement : {context}
 Espace de travail de cette mission : {workspace}
 
 ## Étape 1 — Cartographier l'existant
-Explore ce qui existe dans ton domaine (projets, documents, outils et accès dont tu disposes, conversations et rapports passés) sans rien modifier à ce stade. Rédige `cartographie.md` dans l'espace de travail : ce qui existe, comment ça fonctionne, les points fragiles, ce qui manque. Cherche toi-même les réponses à tes questions ; ne demande au CEO que ce que tu ne peux vraiment pas trouver.
+Explore ce qui existe dans ton domaine (projets, documents, outils et accès dont tu disposes, conversations et rapports passés) sans rien modifier à ce stade. Rédige `cartographie.md` dans l'espace de travail : ce qui existe, comment ça fonctionne, les points fragiles, ce qui manque. Cherche toi-même les réponses à tes questions ; pour ce que tu ne peux vraiment pas trouver, utilise ask_ceo (la question passe d'abord par l'assistant de direction).
 
 ## Étape 2 — Trois améliorations rapides
 Choisis trois améliorations concrètes, utiles tout de suite et sans risque, et fais-les. Note-les dans `ameliorations.md` : ce que tu as fait, pourquoi, le résultat.

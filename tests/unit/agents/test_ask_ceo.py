@@ -41,8 +41,13 @@ async def test_outside_task_goes_to_ceo_channel(monkeypatch):
     with patch.object(ct, "report_to_ceo") as rep:
         rep.ainvoke = AsyncMock(side_effect=fake_report)
         result = await ct.ask_ceo.ainvoke({"questions": Q, "employee_id": "00004"})
-    assert result["status"] == "asked"
+    assert result["status"] == "asked" and result["to"] == "00001"
     assert "```omc-questions" in sent["message"]
+
+    pushed = []
+    monkeypatch.setattr("onemancompany.api.routes._push_adhoc_task", lambda emp, desc, *a, **k: pushed.append((emp, desc)))
+    result = await ct.ask_ceo.ainvoke({"questions": Q, "employee_id": "00007"})
+    assert result["to"] == "00004" and pushed[0][0] == "00004" and "00007" in pushed[0][1]
 
 
 @pytest.mark.asyncio
@@ -73,5 +78,15 @@ async def test_inside_task_creates_ceo_request(monkeypatch):
         result = await ct.ask_ceo.ainvoke({"questions": Q, "employee_id": "00007"})
     finally:
         vessel._current_task_id.reset(token)
-    assert result == {"status": "asked", "request_node": "n1", "message": result["message"]}
-    assert calls["target_employee_id"] == "00001" and "omc-questions" in calls["description"]
+    assert result["status"] == "asked" and result["request_node"] == "n1"
+    # Hierarchy: an employee's questions go to the executive assistant first
+    assert calls["target_employee_id"] == "00004" and "omc-questions" in calls["description"]
+    assert "executive assistant" in calls["description"]
+
+    calls.clear()
+    token = vessel._current_task_id.set("task-2")
+    try:
+        await ct.ask_ceo.ainvoke({"questions": Q, "employee_id": "00004"})
+    finally:
+        vessel._current_task_id.reset(token)
+    assert calls["target_employee_id"] == "00001"
